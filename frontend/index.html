@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VisionDine AI • ניהול תפוסת שולחנות ואנליטיקת שירות במסעדה</title>
+  
+  <!-- Google Fonts: Heebo -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Heebo', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace']
+          },
+          colors: {
+            brand: {
+              50: '#eff6ff',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8'
+            },
+            surface: {
+              800: '#1e293b',
+              850: '#172033',
+              900: '#0f172a',
+              950: '#080d1a'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="bg-surface-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased select-none">
+
+  <!-- Top Navigation Header -->
+  <header class="bg-surface-900 border-b border-slate-800 px-6 py-3 flex items-center justify-between sticky top-0 z-50 shadow-md">
+    <div class="flex items-center space-x-3 space-x-reverse">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/20">
+        <i data-lucide="utensils" class="w-5 h-5 text-white"></i>
+      </div>
+      <div>
+        <div class="flex items-center space-x-2 space-x-reverse">
+          <h1 class="text-lg font-bold tracking-tight text-white">VisionDine <span class="text-blue-400">AI</span></h1>
+          <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+            Provision-ISR Ossia
+          </span>
+        </div>
+        <p class="text-xs text-slate-400">מערכת חכמה לניהול תפוסת שולחנות ומעקב שירות בזמן אמת</p>
+      </div>
+    </div>
+
+    <!-- Center Navigation Tabs -->
+    <nav class="flex items-center space-x-1 space-x-reverse bg-surface-850 p-1 rounded-xl border border-slate-800">
+      <button onclick="switchTab('live')" id="tab-btn-live" class="nav-tab active flex items-center space-x-2 space-x-reverse px-4 py-1.5 rounded-lg text-xs font-semibold transition-all text-white bg-blue-600 shadow-sm">
+        <i data-lucide="layout-dashboard" class="w-4 h-4"></i>
+        <span>מבט חי על המסעדה</span>
+      </button>
+      <button onclick="switchTab('calibration')" id="tab-btn-calibration" class="nav-tab flex items-center space-x-2 space-x-reverse px-4 py-1.5 rounded-lg text-xs font-medium transition-all text-slate-400 hover:text-white hover:bg-slate-800/60">
+        <i data-lucide="pen-tool" class="w-4 h-4"></i>
+        <span>כיול שולחנות (ROI)</span>
+      </button>
+      <button onclick="switchTab('analytics')" id="tab-btn-analytics" class="nav-tab flex items-center space-x-2 space-x-reverse px-4 py-1.5 rounded-lg text-xs font-medium transition-all text-slate-400 hover:text-white hover:bg-slate-800/60">
+        <i data-lucide="bar-chart-3" class="w-4 h-4"></i>
+        <span>אנליטיקה ודוחות</span>
+      </button>
+      <button onclick="switchTab('settings')" id="tab-btn-settings" class="nav-tab flex items-center space-x-2 space-x-reverse px-4 py-1.5 rounded-lg text-xs font-medium transition-all text-slate-400 hover:text-white hover:bg-slate-800/60">
+        <i data-lucide="settings" class="w-4 h-4"></i>
+        <span>הגדרות מצלמה ומערכת</span>
+      </button>
+    </nav>
+
+    <!-- Right Live Health Status -->
+    <div class="flex items-center space-x-3 space-x-reverse text-xs">
+      <div id="connection-pill" class="flex items-center space-x-2 space-x-reverse px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span id="connection-label" class="font-medium">מתחבר...</span>
+      </div>
+      <div class="hidden sm:flex items-center space-x-2 space-x-reverse px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/50 text-slate-300">
+        <i data-lucide="cpu" class="w-3.5 h-3.5 text-blue-400"></i>
+        <span id="fps-badge">AI: -- FPS</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="flex-1 p-6 max-w-[1720px] w-full mx-auto">
+
+    <!-- ========================================== -->
+    <!-- TAB 1: LIVE FLOOR VIEW & METRICS           -->
+    <!-- ========================================== -->
+    <div id="tab-content-live" class="space-y-6">
+      
+      <!-- Top KPI Cards Grid -->
+      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        
+        <!-- KPI 1: סך הכל שולחנות -->
+        <div class="bg-surface-900 border border-slate-800 rounded-2xl p-4 shadow-sm relative overflow-hidden">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium mb-1.5">
+            <span>סך כל השולחנות</span>
+            <i data-lucide="grid" class="w-4 h-4 text-slate-400"></i>
+          </div>
+          <div class="text-2xl font-bold text-white" id="kpi-total-tables">0</div>
+          <div class="text-[11px] text-slate-500 mt-1">שולחנות מכוילים במסעדה</div>
+        </div>
+
+        <!-- KPI 2: תפוסה מול פנוי -->
+        <div class="bg-surface-900 border border-slate-800 rounded-2xl p-4 shadow-sm relative overflow-hidden">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium mb-1.5">
+            <span>תפוסים / פנויים</span>
+            <i data-lucide="users" class="w-4 h-4 text-rose-400"></i>
+          </div>
+          <div class="text-2xl font-bold text-white flex items-center space-x-1.5 space-x-reverse">
+            <span id="kpi-occupied" class="text-rose-400">0</span>
+            <span class="text-slate-500 text-lg">/</span>
+            <span id="kpi-available" class="text-emerald-400">0</span>
+          </div>
+          <div class="w-full bg-slate-800 h-1.5 rounded-full mt-2 overflow-hidden flex flex-row-reverse">
+            <div id="kpi-occupancy-bar" class="bg-rose-500 h-full transition-all duration-500" style="width: 0%"></div>
+            <div id="kpi-available-bar" class="bg-emerald-500 h-full transition-all duration-500" style="width: 100%"></div>
+          </div>
+        </div>
+
+        <!-- KPI 3: סועדים פעילים כרגע -->
+        <div class="bg-surface-900 border border-slate-800 rounded-2xl p-4 shadow-sm relative overflow-hidden">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium mb-1.5">
+            <span>סועדים יושבים כרגע</span>
+            <i data-lucide="user-check" class="w-4 h-4 text-blue-400"></i>
+          </div>
+          <div class="text-2xl font-bold text-blue-400" id="kpi-active-diners">0</div>
+          <div class="text-[11px] text-slate-500 mt-1">זיהוי נוכחות אקטיבי</div>
+        </div>
+
+        <!-- KPI 4: התראות שירות פעילות -->
+        <div class="bg-surface-900 border border-slate-800 rounded-2xl p-4 shadow-sm relative overflow-hidden" id="card-service-alerts">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium mb-1.5">
+            <span>התראות שירות</span>
+            <i data-lucide="bell" class="w-4 h-4 text-amber-400"></i>
+          </div>
+          <div class="text-2xl font-bold text-amber-400 flex items-center space-x-2 space-x-reverse">
+            <span id="kpi-pending-alerts">0</span>
+            <span id="alert-pulse-dot" class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping hidden"></span>
+          </div>
+          <div class="text-[11px] text-slate-500 mt-1">שולחנות הממתינים למלצר</div>
+        </div>
+
+        <!-- KPI 5: זמן שהייה ממוצע -->
+        <div class="bg-surface-900 border border-slate-800 rounded-2xl p-4 shadow-sm relative overflow-hidden">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium mb-1.5">
+            <span>זמן פינוי ממוצע</span>
+            <i data-lucide="clock" class="w-4 h-4 text-indigo-400"></i>
+          </div>
+          <div class="text-2xl font-bold text-white flex items-baseline space-x-1 space-x-reverse">
+            <span id="kpi-avg-turnover">--</span>
+            <span class="text-xs text-slate-400 font-normal">דקות</span>
+          </div>
+          <div class="text-[11px] text-slate-500 mt-1">שולחנות שהסתיימו היום</div>
+        </div>
+
+        <!-- KPI 6: סך סועדים שהוגשו היום -->
+        <div class="bg-surface-900 border border-slate-800 rounded-2xl p-4 shadow-sm relative overflow-hidden">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium mb-1.5">
+            <span>סך סועדים היום</span>
+            <i data-lucide="award" class="w-4 h-4 text-teal-400"></i>
+          </div>
+          <div class="text-2xl font-bold text-teal-400" id="kpi-total-diners-today">0</div>
+          <div class="text-[11px] text-slate-500 mt-1" id="kpi-completed-sessions">0 שולחנות הוגשו</div>
+        </div>
+      </div>
+
+      <!-- Main Live Feed + Live Tables & Alerts Panel -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- Left: Live Video Stream Display (8 cols) -->
+        <div class="lg:col-span-8 space-y-4">
+          <div class="bg-surface-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl relative">
+            
+            <!-- Video Control Bar Header With Camera Switcher & Grid Toggle -->
+            <div class="bg-surface-850 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between flex-wrap gap-2">
+              
+              <div class="flex items-center space-x-3 space-x-reverse">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                <span class="text-xs font-bold text-slate-200" id="stream-header-title">שידור חי • רשת 8 מצלמות (1-8)</span>
+
+                <!-- View Mode Toggle: Matrix vs Single Focus -->
+                <div class="flex items-center space-x-1 space-x-reverse bg-surface-950 p-1 rounded-xl border border-slate-700/80">
+                  <button id="btn-view-matrix" onclick="switchStreamViewMode('matrix')" class="px-3 py-1 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 space-x-reverse bg-blue-600 text-white shadow-sm">
+                    <i data-lucide="grid" class="w-3.5 h-3.5"></i>
+                    <span>רשת 8 מצלמות</span>
+                  </button>
+                  <button id="btn-view-single" onclick="switchStreamViewMode('single')" class="px-3 py-1 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 space-x-reverse text-slate-400 hover:text-white">
+                    <i data-lucide="maximize-2" class="w-3.5 h-3.5"></i>
+                    <span>מצלמה בודדת</span>
+                  </button>
+                </div>
+
+                <!-- Quick Camera Channel Switcher (shown in Single Mode) -->
+                <div id="camera-select-container" class="hidden flex items-center space-x-2 space-x-reverse bg-surface-900 px-3 py-1 rounded-lg border border-slate-700">
+                  <i data-lucide="video" class="w-3.5 h-3.5 text-blue-400"></i>
+                  <label for="camera-select" class="text-xs text-slate-400 font-medium">עבור למצלמה:</label>
+                  <select id="camera-select" onchange="quickSwitchCamera(this.value)" class="bg-transparent text-white font-bold text-xs focus:outline-none cursor-pointer">
+                    <!-- Populated dynamically via JS: 1 to 8 only -->
+                    <option value="1">מצלמה 1</option>
+                    <option value="2">מצלמה 2</option>
+                    <option value="3">מצלמה 3</option>
+                    <option value="4">מצלמה 4</option>
+                    <option value="5">מצלמה 5</option>
+                    <option value="6">מצלמה 6</option>
+                    <option value="7">מצלמה 7</option>
+                    <option value="8">מצלמה 8</option>
+                  </select>
+                </div>
+
+                <!-- 1..8 Quick Jump Buttons (shown in Matrix Mode) -->
+                <div id="matrix-quick-pills" class="flex items-center space-x-1 space-x-reverse">
+                  <span class="text-[11px] text-slate-400 font-medium ml-1">מיקוד:</span>
+                  <button onclick="zoomToCamera(1)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">1</button>
+                  <button onclick="zoomToCamera(2)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">2</button>
+                  <button onclick="zoomToCamera(3)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">3</button>
+                  <button onclick="zoomToCamera(4)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">4</button>
+                  <button onclick="zoomToCamera(5)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">5</button>
+                  <button onclick="zoomToCamera(6)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">6</button>
+                  <button onclick="zoomToCamera(7)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">7</button>
+                  <button onclick="zoomToCamera(8)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">8</button>
+                </div>
+              </div>
+
+              <div class="flex items-center space-x-3 space-x-reverse text-xs">
+                <span class="text-slate-400 font-mono" id="stream-resolution-badge">מטריצה 3x3</span>
+                <button onclick="toggleVideoFullscreen()" class="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition" title="מסך מלא">
+                  <i data-lucide="maximize" class="w-4 h-4"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Video Player Container -->
+            <div class="relative aspect-video bg-black flex items-center justify-center overflow-hidden cursor-pointer" id="video-container" onclick="onVideoPlayerClick(event)">
+              <img id="live-video-stream" src="/api/video_feed?mode=matrix" alt="שידור חי מהמסעדה" class="w-full h-full object-contain">
+              
+              <!-- Video Loading / Reconnecting Overlay -->
+              <div id="video-offline-overlay" class="absolute inset-0 bg-surface-950/80 backdrop-blur-sm flex flex-col items-center justify-center hidden">
+                <div class="w-12 h-12 rounded-full border-2 border-blue-500 border-t-transparent animate-spin mb-3"></div>
+                <p class="text-sm font-semibold text-slate-200" id="offline-overlay-msg">מתחבר לשידור המצלמה...</p>
+                <p class="text-xs text-slate-400 mt-1">נא לוודא שה-NVR ומצלמות ה-Provision מחוברים לרשת.</p>
+              </div>
+
+              <!-- Stream Legend Pill overlay -->
+              <div class="absolute bottom-3 right-3 bg-surface-950/85 backdrop-blur-md border border-slate-800/80 rounded-xl px-3 py-1.5 flex items-center space-x-4 space-x-reverse text-[11px] shadow-lg pointer-events-none">
+                <div class="flex items-center space-x-1.5 space-x-reverse">
+                  <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                  <span class="text-slate-300 font-medium">שולחן פנוי</span>
+                </div>
+                <div class="flex items-center space-x-1.5 space-x-reverse">
+                  <span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                  <span class="text-slate-300 font-medium">שולחן תפוס</span>
+                </div>
+                <div class="flex items-center space-x-1.5 space-x-reverse">
+                  <span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></span>
+                  <span class="text-slate-300 font-medium">ממתין לשירות!</span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Quick Action Buttons -->
+          <div class="flex items-center justify-between text-xs text-slate-400 px-1">
+            <div class="flex items-center space-x-2 space-x-reverse">
+              <i data-lucide="info" class="w-3.5 h-3.5 text-blue-400"></i>
+              <span>מנוע ה-AI מתמקד בנקודות המגע של הסועדים בכיסא וברצפה, ומונע התראות שווא כשאנשים רק חולפים ליד השולחן.</span>
+            </div>
+            <button onclick="switchTab('calibration')" class="text-blue-400 hover:text-blue-300 font-semibold flex items-center space-x-1 space-x-reverse">
+              <span>כוונן גבולות שולחנות</span>
+              <i data-lucide="arrow-left" class="w-3.5 h-3.5"></i>
+            </button>
+          </div>
+        </div>
+
+        <!-- Right: Active Tables Cards & Live Alerts Feed (4 cols) -->
+        <div class="lg:col-span-4 space-y-4">
+          
+          <!-- Live Service Alerts Panel -->
+          <div class="bg-surface-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div class="flex items-center space-x-2 space-x-reverse">
+                <i data-lucide="bell" class="w-4 h-4 text-amber-400"></i>
+                <h3 class="text-sm font-bold text-white">התראות שירות ומלצרים</h3>
+              </div>
+              <span id="alerts-badge-count" class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-300">0 פתוחות</span>
+            </div>
+
+            <div id="live-alerts-list" class="mt-3 space-y-2 max-h-48 overflow-y-auto pr-1">
+              <!-- Dynamically populated or empty placeholder -->
+              <div class="p-3 rounded-xl bg-surface-850/60 border border-slate-800 text-center text-xs text-slate-500">
+                אין התראות פתוחות. כל השולחנות מטופלים כראוי!
+              </div>
+            </div>
+          </div>
+
+          <!-- Real-Time Tables Status Grid -->
+          <div class="bg-surface-900 border border-slate-800 rounded-2xl p-4 shadow-sm flex flex-col h-[400px]">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div class="flex items-center space-x-2 space-x-reverse">
+                <i data-lucide="layout-grid" class="w-4 h-4 text-blue-400"></i>
+                <h3 class="text-sm font-bold text-white">מצב שולחנות נוכחי</h3>
+              </div>
+              <span class="text-xs text-slate-400" id="live-table-count">0 שולחנות</span>
+            </div>
+
+            <!-- Scrollable Table Cards -->
+            <div id="live-tables-container" class="mt-3 space-y-2.5 overflow-y-auto pr-1 flex-1">
+              <!-- Rendered via JS -->
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- ========================================== -->
+    <!-- TAB 2: INTERACTIVE ROI CALIBRATION TOOL    -->
+    <!-- ========================================== -->
+    <div id="tab-content-calibration" class="hidden space-y-6">
+      
+      <div class="bg-surface-900 border border-slate-800 rounded-2xl p-5 shadow-sm">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+          <div>
+            <h2 class="text-base font-bold text-white flex items-center space-x-2 space-x-reverse">
+              <i data-lucide="pen-tool" class="w-5 h-5 text-blue-400"></i>
+              <span>כיול גבולות שולחנות (ROI) על גבי תמונת המצלמה</span>
+            </h2>
+            <p class="text-xs text-slate-400 mt-1">
+              לחץ על התמונה עם העכבר כדי לסמן את 4 הפינות של כל שולחן וכיסאותיו. ניתן לגרור נקודות כדי לכוונן במדויק.
+            </p>
+          </div>
+          <div class="flex items-center space-x-2 space-x-reverse flex-wrap gap-2">
+            <!-- Calibration Camera Channel Selector -->
+            <div class="flex items-center space-x-1.5 space-x-reverse bg-surface-950 px-3 py-1.5 rounded-xl border border-blue-500/30">
+              <i data-lucide="video" class="w-4 h-4 text-blue-400"></i>
+              <label for="calib-camera-select" class="text-xs font-bold text-slate-300">בחר מצלמה:</label>
+              <select id="calib-camera-select" onchange="onCalibrationCameraChange(this.value)" class="bg-transparent text-blue-400 font-bold text-xs focus:outline-none cursor-pointer">
+                <option value="1">מצלמה 1</option>
+                <option value="2">מצלמה 2</option>
+                <option value="3">מצלמה 3</option>
+                <option value="4">מצלמה 4</option>
+                <option value="5">מצלמה 5</option>
+                <option value="6">מצלמה 6</option>
+                <option value="7">מצלמה 7</option>
+                <option value="8">מצלמה 8</option>
+              </select>
+            </div>
+
+            <button onclick="calibrationGrabSnapshot()" class="flex items-center space-x-2 space-x-reverse px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 transition">
+              <i data-lucide="camera" class="w-4 h-4 text-blue-400"></i>
+              <span>רענן פריים מהמצלמה</span>
+            </button>
+            <button onclick="calibrationAddNewTable()" class="flex items-center space-x-2 space-x-reverse px-3.5 py-2 rounded-xl text-xs font-semibold bg-blue-600 text-white hover:bg-blue-500 transition shadow-sm">
+              <i data-lucide="plus" class="w-4 h-4"></i>
+              <span>הוסף שולחן חדש</span>
+            </button>
+            <button onclick="calibrationResetDefaults()" class="flex items-center space-x-2 space-x-reverse px-3 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition">
+              <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+              <span>איפוס</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Canvas Workspace & Sidebar -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-4">
+          
+          <!-- Drawing Canvas (9 cols) -->
+          <div class="lg:col-span-9 space-y-3">
+            <div class="relative bg-black rounded-xl overflow-hidden border border-slate-800 flex items-center justify-center">
+              <canvas id="roi-canvas" width="1280" height="720" class="w-full h-auto cursor-crosshair block"></canvas>
+              <div id="canvas-loading" class="absolute inset-0 bg-surface-950/70 backdrop-blur-sm flex items-center justify-center hidden">
+                <div class="flex items-center space-x-3 space-x-reverse text-sm text-slate-200">
+                  <div class="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                  <span>מצלם פריים ברזולוציה גבוהה מהמצלמה...</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Canvas Controls -->
+            <div class="flex items-center justify-between text-xs text-slate-400 bg-surface-850 p-3 rounded-xl border border-slate-800">
+              <div class="flex items-center space-x-4 space-x-reverse">
+                <span><kbd class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">קליק שמאלי</kbd> הוספת נקודה</span>
+                <span><kbd class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">גרירה</kbd> הזזת פינה</span>
+                <span><kbd class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">קליק ימני</kbd> סגירת שולחן</span>
+              </div>
+              <div class="flex items-center space-x-2 space-x-reverse">
+                <button onclick="calibrationUndoPoint()" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 transition">בטל נקודה</button>
+                <button onclick="calibrationClearCurrentPolygon()" class="px-3 py-1 rounded bg-slate-800 hover:bg-rose-500/20 text-rose-300 transition">נקה נקודות</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Table Editor Panel (3 cols) -->
+          <div class="lg:col-span-3 space-y-4">
+            <div class="bg-surface-850 p-4 rounded-xl border border-slate-800 space-y-4">
+              <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">הגדרות השולחן הנבחר</h3>
+              
+              <div class="space-y-3 text-xs">
+                <div>
+                  <label class="block text-slate-400 mb-1">מזהה שולחן (באנגלית/קוד ייחודי)</label>
+                  <input type="text" id="editor-table-id" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 font-mono text-xs">
+                </div>
+
+                <div>
+                  <label class="block text-slate-400 mb-1">שם השולחן לתצוגה</label>
+                  <input type="text" id="editor-table-name" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 text-xs">
+                </div>
+
+                <div>
+                  <label class="block text-slate-400 mb-1">משויך למצלמה</label>
+                  <select id="editor-table-camera" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 text-xs">
+                    <option value="1">מצלמה 1</option>
+                    <option value="2">מצלמה 2</option>
+                    <option value="3">מצלמה 3</option>
+                    <option value="4">מצלמה 4</option>
+                    <option value="5">מצלמה 5</option>
+                    <option value="6">מצלמה 6</option>
+                    <option value="7">מצלמה 7</option>
+                    <option value="8">מצלמה 8</option>
+                  </select>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                  <div>
+                    <label class="block text-slate-400 mb-1">מקומות ישיבה</label>
+                    <input type="number" id="editor-table-capacity" min="1" max="20" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 text-xs">
+                  </div>
+                  <div>
+                    <label class="block text-slate-400 mb-1">התראה (דקות)</label>
+                    <input type="number" id="editor-table-alert-min" min="1" max="60" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 text-xs">
+                  </div>
+                </div>
+
+                <div>
+                  <span class="block text-slate-400 mb-1">פינות מסומנות</span>
+                  <div id="editor-vertices-count" class="text-slate-300 font-mono bg-surface-900 p-2 rounded-lg border border-slate-800 text-[11px]">0 נקודות</div>
+                </div>
+
+                <div class="pt-2 flex flex-col space-y-2">
+                  <button onclick="calibrationSaveCurrentTable()" class="w-full py-2.5 rounded-xl font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition shadow-sm flex items-center justify-center space-x-1.5 space-x-reverse">
+                    <i data-lucide="check" class="w-4 h-4"></i>
+                    <span>שמור שולחן</span>
+                  </button>
+                  <button onclick="calibrationDeleteCurrentTable()" class="w-full py-2 rounded-xl text-rose-400 hover:bg-rose-500/10 transition border border-rose-500/20 text-xs font-medium">
+                    מחק שולחן
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Configured Tables List in Sidebar -->
+            <div class="bg-surface-850 p-4 rounded-xl border border-slate-800 space-y-2.5">
+              <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">שולחנות מוגדרים</h3>
+              <div id="calibration-tables-list" class="space-y-1.5 max-h-56 overflow-y-auto pr-1 text-xs">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- ========================================== -->
+    <!-- TAB 3: ANALYTICS & REPORTS                 -->
+    <!-- ========================================== -->
+    <div id="tab-content-analytics" class="hidden space-y-6">
+      
+      <!-- Charts Grid -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- Hourly Occupancy & Diners Chart (8 cols) -->
+        <div class="lg:col-span-8 bg-surface-900 border border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+          <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+            <div>
+              <h3 class="text-sm font-bold text-white flex items-center space-x-2 space-x-reverse">
+                <i data-lucide="trending-up" class="w-4 h-4 text-blue-400"></i>
+                <span>תפוסת שולחנות וכמות סועדים לפי שעות היממה (24 שעות)</span>
+              </h3>
+              <p class="text-xs text-slate-400 mt-0.5">זיהוי שעות עומס (Peak Hours) וחלוקת עומסי סועדים במסעדה</p>
+            </div>
+            <button onclick="loadAnalyticsData()" class="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800" title="רענן נתונים">
+              <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+            </button>
+          </div>
+          <div class="h-72 w-full">
+            <canvas id="chart-hourly"></canvas>
+          </div>
+        </div>
+
+        <!-- Table Performance & Utilization (4 cols) -->
+        <div class="lg:col-span-4 bg-surface-900 border border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+          <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+            <div>
+              <h3 class="text-sm font-bold text-white flex items-center space-x-2 space-x-reverse">
+                <i data-lucide="pie-chart" class="w-4 h-4 text-indigo-400"></i>
+                <span>תחלופת שולחנות</span>
+              </h3>
+              <p class="text-xs text-slate-400 mt-0.5">מספר מחזורי ישיבה לפי שולחן</p>
+            </div>
+          </div>
+          <div class="h-72 w-full flex items-center justify-center">
+            <canvas id="chart-turnover-pie"></canvas>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Detailed Table Turnover Metrics Table & Event Log -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- Per-Table Analytics Breakdown (7 cols) -->
+        <div class="lg:col-span-7 bg-surface-900 border border-slate-800 rounded-2xl p-5 shadow-sm space-y-3">
+          <h3 class="text-sm font-bold text-white flex items-center space-x-2 space-x-reverse pb-2 border-b border-slate-800">
+            <i data-lucide="table" class="w-4 h-4 text-emerald-400"></i>
+            <span>פירוט ביצועי שולחנות וזמני שהייה</span>
+          </h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-right text-xs text-slate-300">
+              <thead class="bg-surface-850 text-slate-400 text-[11px] uppercase tracking-wider">
+                <tr>
+                  <th class="py-2.5 px-3 rounded-r-lg">שם השולחן</th>
+                  <th class="py-2.5 px-3">מספר תחלופות</th>
+                  <th class="py-2.5 px-3">משך ישיבה ממוצע</th>
+                  <th class="py-2.5 px-3 rounded-l-lg">סך סועדים</th>
+                </tr>
+              </thead>
+              <tbody id="analytics-tables-body" class="divide-y divide-slate-800 font-medium">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Real-Time Event Log (5 cols) -->
+        <div class="lg:col-span-5 bg-surface-900 border border-slate-800 rounded-2xl p-5 shadow-sm space-y-3 flex flex-col h-80">
+          <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+            <h3 class="text-sm font-bold text-white flex items-center space-x-2 space-x-reverse">
+              <i data-lucide="list-ordered" class="w-4 h-4 text-blue-400"></i>
+              <span>יומן אירועים מתועד</span>
+            </h3>
+            <span class="text-[11px] text-slate-500 font-mono">SQLite DB מובנה</span>
+          </div>
+          <div id="analytics-events-container" class="space-y-2 overflow-y-auto pr-1 flex-1 text-xs">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- ========================================== -->
+    <!-- TAB 4: CAMERA & SYSTEM SETTINGS            -->
+    <!-- ========================================== -->
+    <div id="tab-content-settings" class="hidden space-y-6 max-w-4xl mx-auto">
+      
+      <!-- Video Stream & RTSP Configuration -->
+      <div class="bg-surface-900 border border-slate-800 rounded-2xl p-6 shadow-sm space-y-6">
+        <div>
+          <h2 class="text-base font-bold text-white flex items-center space-x-2 space-x-reverse">
+            <i data-lucide="video" class="w-5 h-5 text-blue-400"></i>
+            <span>הגדרות מצלמות וחיבור Provision-ISR Ossia</span>
+          </h2>
+          <p class="text-xs text-slate-400 mt-1">
+            הגדר את כתובת ה-NVR, מספר הערוץ והפרוטוקול של מצלמות המסעדה.
+          </p>
+        </div>
+
+        <!-- Video Source Selection -->
+        <div class="space-y-3">
+          <label class="block text-xs font-semibold text-slate-300">מקור וידאו פעיל</label>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label class="cursor-pointer border border-slate-700/60 rounded-xl p-3 bg-surface-850 hover:border-blue-500 transition flex items-center space-x-3 space-x-reverse">
+              <input type="radio" name="video_source" value="rtsp" id="src-rtsp" class="text-blue-600 focus:ring-0">
+              <div>
+                <div class="text-xs font-semibold text-white">מצלמות מסעדה חיות (RTSP)</div>
+                <div class="text-[11px] text-slate-400">חיבור ישיר ל-NVR Provision-ISR</div>
+              </div>
+            </label>
+
+            <label class="cursor-pointer border border-slate-700/60 rounded-xl p-3 bg-surface-850 hover:border-blue-500 transition flex items-center space-x-3 space-x-reverse">
+              <input type="radio" name="video_source" value="sample" id="src-sample" class="text-blue-600 focus:ring-0">
+              <div>
+                <div class="text-xs font-semibold text-white">הדמיית מסעדה (מצב בדיקה)</div>
+                <div class="text-[11px] text-slate-400">סרטון סימולציה מובנה לבדיקות</div>
+              </div>
+            </label>
+
+            <label class="cursor-pointer border border-slate-700/60 rounded-xl p-3 bg-surface-850 hover:border-blue-500 transition flex items-center space-x-3 space-x-reverse">
+              <input type="radio" name="video_source" value="file" id="src-file" class="text-blue-600 focus:ring-0">
+              <div>
+                <div class="text-xs font-semibold text-white">קובץ וידאו מקומי (MP4)</div>
+                <div class="text-[11px] text-slate-400">נתיב לקובץ הקלטה במחשב</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- RTSP Stream Builder for Ossia VMS -->
+        <div id="settings-rtsp-panel" class="bg-surface-850 p-4 rounded-xl border border-slate-800 space-y-4">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-bold uppercase tracking-wider text-slate-300">פרטי התחברות Provision-ISR / Ossia</span>
+            <span class="text-[11px] text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded font-mono">TCP Transport</span>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            <div>
+              <label class="block text-slate-400 mb-1">כתובת IP של המכשיר (NVR)</label>
+              <input type="text" id="cfg-ossia-ip" placeholder="192.168.1.100" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">פורט RTSP (ברירת מחדל: 554)</label>
+              <input type="number" id="cfg-ossia-port" value="554" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">ערוץ / מספר מצלמה (1..16)</label>
+              <input type="number" id="cfg-ossia-ch" value="1" min="1" max="64" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">שם משתמש</label>
+              <input type="text" id="cfg-ossia-user" value="admin" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">סיסמה</label>
+              <input type="password" id="cfg-ossia-pass" placeholder="הזן סיסמת NVR" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">איכות שידור (Stream)</label>
+              <select id="cfg-ossia-stream" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                <option value="0" selected>Main Stream (איכות שיא 2.5K)</option>
+                <option value="1">Sub Stream (חסכוני במשאבים)</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-slate-400 text-xs mb-1">כתובת RTSP שנוצרה אוטומטית</label>
+            <div class="flex space-x-2 space-x-reverse">
+              <input type="text" id="cfg-rtsp-url" class="flex-1 bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs" dir="ltr">
+              <button onclick="testRTSPConnection()" id="btn-test-rtsp" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-xs font-semibold transition flex items-center space-x-1.5 space-x-reverse whitespace-nowrap">
+                <i data-lucide="radio" class="w-3.5 h-3.5"></i>
+                <span>בדוק חיבור</span>
+              </button>
+            </div>
+            <div id="rtsp-test-result" class="text-xs mt-1.5 hidden"></div>
+          </div>
+        </div>
+
+        <!-- Local Video File Path (if selected) -->
+        <div id="settings-file-panel" class="bg-surface-850 p-4 rounded-xl border border-slate-800 space-y-2 hidden">
+          <label class="block text-xs font-semibold text-slate-300">נתיב לקובץ MP4 מקומי</label>
+          <input type="text" id="cfg-video-file-path" placeholder="sample_videos/demo_restaurant.mp4" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs" dir="ltr">
+          <p class="text-[11px] text-slate-400">נתיב יחסי או מלא לקובץ וידאו שנשמר במחשב.</p>
+        </div>
+
+        <!-- Computer Vision & State Machine Throttling -->
+        <div class="space-y-4 pt-2 border-t border-slate-800">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-300">הגדרות בינה מלאכותית וסינון רעשים</h3>
+          
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+            
+            <div>
+              <div class="flex justify-between mb-1">
+                <label class="text-slate-300">קצב עיבוד AI פריימים לשנייה (FPS Throttle)</label>
+                <span id="lbl-target-fps" class="text-blue-400 font-mono">5.0 FPS</span>
+              </div>
+              <input type="range" id="cfg-target-fps" min="1" max="15" step="1" value="5" class="w-full accent-blue-500">
+              <p class="text-[11px] text-slate-500 mt-1">שומר על צריכת מעבד/כרטיס מסך נמוכה ויציבה 24/7 תוך שמירה על דיוק מלא.</p>
+            </div>
+
+            <div>
+              <div class="flex justify-between mb-1">
+                <label class="text-slate-300">חלון מניעת הבהובים (Debounce Buffer)</label>
+                <span id="lbl-debounce" class="text-blue-400 font-mono">4.0 שניות</span>
+              </div>
+              <input type="range" id="cfg-debounce" min="1" max="10" step="0.5" value="4" class="w-full accent-blue-500">
+              <p class="text-[11px] text-slate-500 mt-1">מונע מעבר שגוי של שולחן ל'תפוס' כאשר מלצר או לקוח רק חולף ליד השולחן.</p>
+            </div>
+
+            <div>
+              <div class="flex justify-between mb-1">
+                <label class="text-slate-300">זמן התראה למלצר (ברירת מחדל)</label>
+                <span id="lbl-alert-thresh" class="text-blue-400 font-mono">180 שניות (3 דקות)</span>
+              </div>
+              <input type="range" id="cfg-alert-thresh" min="30" max="600" step="15" value="180" class="w-full accent-blue-500">
+              <p class="text-[11px] text-slate-500 mt-1">מפעיל התראה למלצר כאשר שולחן יושב מעל זמן זה ללא שירות.</p>
+            </div>
+
+            <div>
+              <div class="flex justify-between mb-1">
+                <label class="text-slate-300">סף ביטחון זיהוי אדם (YOLO Confidence)</label>
+                <span id="lbl-conf" class="text-blue-400 font-mono">0.35</span>
+              </div>
+              <input type="range" id="cfg-conf" min="0.1" max="0.9" step="0.05" value="0.35" class="w-full accent-blue-500">
+              <p class="text-[11px] text-slate-500 mt-1">רגישות מודל הבינה המלאכותית לזיהוי אנשים.</p>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Telegram Mobile Push Notifications Card -->
+        <div class="bg-surface-850 p-5 rounded-2xl border border-slate-800 space-y-4">
+          <div class="flex items-center justify-between">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center space-x-2 space-x-reverse">
+              <i data-lucide="send" class="w-4 h-4 text-sky-400"></i>
+              <span>התראות בזמן אמת לטלפון הנייד (Telegram Bot)</span>
+            </h3>
+            <span class="text-[11px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded font-medium">התראה ישירה למלצרים</span>
+          </div>
+          <p class="text-xs text-slate-400">
+            קבל התראות פוש מיידיות ישירות לטלפון כששולחן יושב וממתין לשירות.
+          </p>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+            <div>
+              <label class="block text-slate-400 mb-1">Telegram Bot Token</label>
+              <input type="text" id="cfg-telegram-token" placeholder="לדוגמה: 123456789:ABCdefGhIJKlmNo..." class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+            </div>
+            <div>
+              <label class="block text-slate-400 mb-1">Telegram Chat ID (קבוצה או משתמש)</label>
+              <input type="text" id="cfg-telegram-chat" placeholder="לדוגמה: -1001234567890 או 98765432" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+            </div>
+          </div>
+          <div class="flex items-center justify-between pt-2">
+            <label class="flex items-center space-x-2 space-x-reverse cursor-pointer text-xs text-slate-300">
+              <input type="checkbox" id="cfg-telegram-enabled" checked class="rounded border-slate-700 text-sky-500 focus:ring-0">
+              <span>הפעל התראות פוש לטלפון</span>
+            </label>
+            <button onclick="testTelegramAlert()" id="btn-test-telegram" class="px-3.5 py-1.5 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 text-xs font-semibold transition flex items-center space-x-1.5 space-x-reverse">
+              <i data-lucide="send" class="w-3.5 h-3.5"></i>
+              <span>שלח הודעת בדיקה לטלפון</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Firebase Cloud Database Card -->
+        <div class="bg-surface-850 p-5 rounded-2xl border border-slate-800 space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center space-x-2 space-x-reverse">
+              <i data-lucide="cloud" class="w-4 h-4 text-amber-400"></i>
+              <span>מסד נתונים בענן (Firebase Cloud Firestore)</span>
+            </h3>
+            <span id="badge-firebase-status" class="text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded font-mono">ממתין להגדרת מפתח</span>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            כל נתוני הסועדים, זמני הישיבה וההתראות יכולים להישמר ישירות בחשבון ה-Firebase שלך בענן, ללא תפיסת מקום בדיסק של המחשב.
+          </p>
+          <div class="p-3 rounded-xl bg-surface-900 border border-slate-800 text-[11px] text-slate-400 space-y-1">
+            <div class="font-semibold text-slate-300">כיצד לחבר את ה-Firebase שלך:</div>
+            <div>1. פתח פרויקט חדש ב-Firebase Console והפעל את Firestore Database.</div>
+            <div>2. עבור ל-Project Settings &larr; Service accounts &larr; לחץ Generate new private key.</div>
+            <div>3. שמור את קובץ ה-JSON בתיקייה: <code class="text-amber-300 font-mono">config/firebase_credentials.json</code>.</div>
+            <div class="text-emerald-400 pt-1">המערכת תזהה את הקובץ אוטומטית ותסנכרן את כל הנתונים לענן!</div>
+          </div>
+        </div>
+
+        <!-- Save Button -->
+        <div class="pt-4 border-t border-slate-800 flex justify-end">
+          <button onclick="saveSystemSettings()" class="px-6 py-2.5 rounded-xl font-bold bg-blue-600 hover:bg-blue-500 text-white transition shadow-lg shadow-blue-500/20 text-xs flex items-center space-x-2 space-x-reverse">
+            <i data-lucide="save" class="w-4 h-4"></i>
+            <span>שמור והחל הגדרות</span>
+          </button>
+        </div>
+
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- Notification Toast Container -->
+  <div id="toast-container" class="fixed bottom-5 left-5 z-50 space-y-2 pointer-events-none"></div>
+
+  <!-- JavaScript Modules -->
+  <script src="/static/js/calibration.js?v=3.0"></script>
+  <script src="/static/js/analytics.js?v=3.0"></script>
+  <script src="/static/js/app.js?v=3.0"></script>
+  <script>
+    // Initialize Lucide Icons
+    lucide.createIcons();
+  </script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "video_source": "rtsp",
+  "rtsp_url": "rtsp://admin:YOUR_PASSWORD@192.168.1.100:554/chID=1&streamType=sub&linkType=tcp",
+  "rtsp_transport": "tcp",
+  "video_file_path": "sample_videos/demo_restaurant.mp4",
+  "model_name": "yolov8n.pt",
+  "confidence_threshold": 0.35,
+  "target_fps": 5.0,
+  "stream_fps": 15.0,
+  "debounce_seconds": 4.0,
+  "service_alert_threshold_seconds": 180,
+  "reconnect_interval_seconds": 5.0,
+  "server_host": "0.0.0.0",
+  "server_port": 8085,
+  "ossia_ip": "192.168.1.100",
+  "ossia_port": 554,
+  "ossia_user": "admin",
+  "ossia_pass": "YOUR_PASSWORD",
+  "ossia_channel": 1,
+  "ossia_stream": 1
+}

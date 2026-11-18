@@ -1,0 +1,68 @@
+# ==============================================================================
+# Git Ignore - VisionDine AI
+# ==============================================================================
+
+# Credentials, Private Keys & Secret Configs
+config/settings.json
+config/firebase_credentials.json
+config/telegram_config.json
+*.secret
+*.env
+.env
+.env.*
+*serviceAccountKey*.json
+*credentials*.json
+!config/firebase_credentials.example.json
+!config/settings.example.json
+!config/telegram_config.example.json
+
+# Local Database & Analytics State
+*.db
+*.sqlite
+*.sqlite3
+restaurant_analytics.db
+
+# Camera Snapshots, Private Customer Footage & Video Recordings
+scratch_cameras/
+sample_videos/
+*.mp4
+*.avi
+*.mkv
+*.jpg
+*.jpeg
+*_preview.png
+provision_ch*.jpg
+thumb_ch*.jpg
+camera_*.jpg
+real_restaurant_ch1.jpg
+live_camera_snapshot.jpg
+grid_preview.jpg
+
+# Deep Learning / YOLO Model Weights (auto-downloaded on first run)
+*.pt
+*.onnx
+*.engine
+*.weights
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# Logs & Audit Dumps
+*.log
+logs/
+
+# IDE & Operating System Metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
