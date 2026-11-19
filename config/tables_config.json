@@ -1,119 +1,7 @@
 [
   {
-    "id": "table_01",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 35",
-    "camera_channel": 8,
-    "capacity": 4,
-    "service_threshold_sec": 180,
-    "polygon": [
-      [
-        0.0486,
-        0.5503
-      ],
-      [
-        0.2062,
-        0.6173
-      ],
-      [
-        0.2313,
-        0.9987
-      ],
-      [
-        0.0132,
-        0.9631
-      ],
-      [
-        0.0067,
-        0.7693
-      ],
-      [
-        0.0412,
-        0.7439
-      ],
-      [
-        0.0272,
-        0.6988
-      ]
-    ]
-  },
-  {
-    "id": "table_06",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 33",
-    "camera_channel": 8,
-    "capacity": 8,
-    "service_threshold_sec": 180,
-    "polygon": [
-      [
-        0.3161,
-        0.4574
-      ],
-      [
-        0.6908,
-        0.3671
-      ],
-      [
-        0.9881,
-        0.9945
-      ],
-      [
-        0.3767,
-        0.9768
-      ]
-    ]
-  },
-  {
-    "id": "table_07",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 18",
-    "camera_channel": 8,
-    "capacity": 2,
-    "service_threshold_sec": 180,
-    "polygon": [
-      [
-        0.1381,
-        0.3119
-      ],
-      [
-        0.3953,
-        0.1752
-      ],
-      [
-        0.4559,
-        0.3844
-      ],
-      [
-        0.194,
-        0.5129
-      ]
-    ]
-  },
-  {
-    "id": "table_08",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 14",
-    "camera_channel": 8,
-    "capacity": 4,
-    "service_threshold_sec": 180,
-    "polygon": [
-      [
-        0.5258,
-        0.2764
-      ],
-      [
-        0.6731,
-        0.126
-      ],
-      [
-        0.8315,
-        0.2764
-      ],
-      [
-        0.7458,
-        0.383
-      ]
-    ]
-  },
-  {
     "id": "table_10",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 10",
+    "name": "שולחן 10",
     "camera_channel": 6,
     "capacity": 4,
     "service_threshold_sec": 180,
@@ -137,33 +25,8 @@
     ]
   },
   {
-    "id": "table_12",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 9",
-    "camera_channel": 3,
-    "capacity": 4,
-    "service_threshold_sec": 180,
-    "polygon": [
-      [
-        0.1577,
-        0.3347
-      ],
-      [
-        0.3506,
-        0.1627
-      ],
-      [
-        0.5286,
-        0.3688
-      ],
-      [
-        0.3096,
-        0.6866
-      ]
-    ]
-  },
-  {
     "id": "table_14",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 14",
+    "name": "שולחן 14",
     "camera_channel": 8,
     "capacity": 4,
     "service_threshold_sec": 180,
@@ -188,7 +51,7 @@
   },
   {
     "id": "table_vip",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df VIP",
+    "name": "שולחן VIP",
     "camera_channel": 4,
     "capacity": 12,
     "service_threshold_sec": 240,
@@ -212,83 +75,8 @@
     ]
   },
   {
-    "id": "table_30",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 10",
-    "camera_channel": 6,
-    "capacity": 4,
-    "service_threshold_sec": 180,
-    "polygon": [
-      [
-        0.1959,
-        0.3127
-      ],
-      [
-        0.3469,
-        0.5779
-      ],
-      [
-        0.1213,
-        0.8568
-      ],
-      [
-        0.0011,
-        0.5178
-      ]
-    ]
-  },
-  {
-    "id": "table_31",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 15",
-    "camera_channel": 6,
-    "capacity": 4,
-    "service_threshold_sec": 180,
-    "polygon": [
-      [
-        0.6442,
-        0.3989
-      ],
-      [
-        0.9312,
-        0.552
-      ],
-      [
-        0.839,
-        0.8991
-      ],
-      [
-        0.496,
-        0.716
-      ]
-    ]
-  },
-  {
-    "id": "table_32",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 11",
-    "camera_channel": 6,
-    "capacity": 4,
-    "service_threshold_sec": 180,
-    "polygon": [
-      [
-        0.4019,
-        0.1471
-      ],
-      [
-        0.5808,
-        0.3152
-      ],
-      [
-        0.4112,
-        0.5476
-      ],
-      [
-        0.2136,
-        0.3002
-      ]
-    ]
-  },
-  {
     "id": "table_1",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 1",
+    "name": "שולחן 1",
     "camera_channel": 2,
     "capacity": 6,
     "service_threshold_sec": 180,
@@ -313,7 +101,7 @@
   },
   {
     "id": "table_15",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 15",
+    "name": "שולחן 15",
     "camera_channel": 6,
     "capacity": 4,
     "service_threshold_sec": 180,
@@ -338,7 +126,7 @@
   },
   {
     "id": "table_18",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 18",
+    "name": "שולחן 18",
     "camera_channel": 8,
     "capacity": 2,
     "service_threshold_sec": 180,
@@ -363,7 +151,7 @@
   },
   {
     "id": "table_35",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 35",
+    "name": "שולחן 35",
     "camera_channel": 8,
     "capacity": 4,
     "service_threshold_sec": 180,
@@ -400,7 +188,7 @@
   },
   {
     "id": "table_33",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 33",
+    "name": "שולחן 33",
     "camera_channel": 8,
     "capacity": 8,
     "service_threshold_sec": 180,
@@ -425,7 +213,7 @@
   },
   {
     "id": "table_11",
-    "name": "\u05e9\u05d5\u05dc\u05d7\u05df 11",
+    "name": "שולחן 11",
     "camera_channel": 6,
     "capacity": 4,
     "service_threshold_sec": 180,
@@ -445,6 +233,31 @@
       [
         0.2136,
         0.3002
+      ]
+    ]
+  },
+  {
+    "id": "table_09",
+    "name": "שולחן 9",
+    "camera_channel": 3,
+    "capacity": 4,
+    "service_threshold_sec": 180,
+    "polygon": [
+      [
+        0.1577,
+        0.3347
+      ],
+      [
+        0.3506,
+        0.1627
+      ],
+      [
+        0.5286,
+        0.3688
+      ],
+      [
+        0.3096,
+        0.6866
       ]
     ]
   }

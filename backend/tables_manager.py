@@ -14,6 +14,7 @@ class TableModel(BaseModel):
     capacity: int = Field(default=4, ge=1)
     service_threshold_sec: int = Field(default=180, ge=10)
     polygon: List[List[float]]  # List of [x, y] in normalized [0.0 .. 1.0] coordinates
+    old_id: Optional[str] = None  # If renaming from an existing table ID
 
 class TablesManager:
     def __init__(self, config_path: Path = TABLES_FILE):
@@ -38,9 +39,9 @@ class TablesManager:
     def save(self) -> None:
         with self._lock:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            data = [t.model_dump() for t in self.tables.values()]
+            data = [t.model_dump(exclude={'old_id'}) for t in self.tables.values()]
             with open(self.config_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
+                json.dump(data, f, indent=2, ensure_ascii=False)
 
     def get_all(self) -> List[TableModel]:
         with self._lock:
@@ -60,6 +61,9 @@ class TablesManager:
         table.polygon = validated_poly
 
         with self._lock:
+            # If renaming from an existing table ID, remove the previous ID entry
+            if table.old_id and table.old_id != table.id and table.old_id in self.tables:
+                del self.tables[table.old_id]
             self.tables[table.id] = table
         self.save()
         return table

@@ -34,6 +34,31 @@ function initCalibrationTool() {
     calibSel.value = savedCam;
   }
 
+  // Auto-sync between table name and table id
+  const idInput = document.getElementById('editor-table-id');
+  const nameInput = document.getElementById('editor-table-name');
+  if (nameInput && idInput) {
+    nameInput.addEventListener('input', () => {
+      const match = nameInput.value.match(/\d+/);
+      if (match) {
+        const num = match[0];
+        if (!idInput.value || idInput.value.startsWith('table_') || /^\d+$/.test(idInput.value)) {
+          idInput.value = `table_${num}`;
+        }
+      }
+    });
+
+    idInput.addEventListener('input', () => {
+      const match = idInput.value.match(/\d+/);
+      if (match) {
+        const num = match[0];
+        if (!nameInput.value || nameInput.value.startsWith('שולחן ') || /^\d+$/.test(nameInput.value)) {
+          nameInput.value = `שולחן ${num}`;
+        }
+      }
+    });
+  }
+
   // Load configured tables from backend
   loadCalibrationTables();
   // Grab snapshot automatically
@@ -439,10 +464,20 @@ function calibrationClearCurrentPolygon() {
 }
 
 async function calibrationSaveCurrentTable() {
-  const tableId = document.getElementById('editor-table-id').value.trim();
-  const tableName = document.getElementById('editor-table-name').value.trim();
+  let tableId = document.getElementById('editor-table-id').value.trim();
+  let tableName = document.getElementById('editor-table-name').value.trim();
   const capacity = parseInt(document.getElementById('editor-table-capacity').value) || 4;
   const alertMin = parseInt(document.getElementById('editor-table-alert-min').value) || 3;
+
+  // Auto-normalize ID if user entered just a number e.g. "18" -> "table_18"
+  if (/^\d+$/.test(tableId)) {
+    tableId = `table_${tableId}`;
+    document.getElementById('editor-table-id').value = tableId;
+  }
+  if (/^\d+$/.test(tableName)) {
+    tableName = `שולחן ${tableName}`;
+    document.getElementById('editor-table-name').value = tableName;
+  }
 
   if (!tableId || !tableName) {
     showToast('נא להזין מזהה שולחן ושם תצוגה', 'error');
@@ -466,13 +501,17 @@ async function calibrationSaveCurrentTable() {
   const camInput = document.getElementById('editor-table-camera');
   const cameraChannel = calIsDrawingNew ? (parseInt(calibSel?.value) || 1) : (parseInt(camInput?.value) || parseInt(calibSel?.value) || 1);
 
+  // If editing an existing table and changed its ID, pass old_id so backend deletes the previous ID and replaces it!
+  const oldId = (calSelectedTableId && calSelectedTableId !== '__new__') ? calSelectedTableId : null;
+
   const payload = {
     id: tableId,
     name: tableName,
     camera_channel: cameraChannel,
     capacity: capacity,
     service_threshold_sec: alertMin * 60,
-    polygon: polygonToSave
+    polygon: polygonToSave,
+    old_id: oldId
   };
 
   try {
@@ -484,7 +523,8 @@ async function calibrationSaveCurrentTable() {
 
     if (res.ok) {
       calIsDrawingNew = false;
-      showToast(`שולחן "${tableName}" נשמר בהצלחה!`, 'success');
+      showToast(`שולחן "${tableName}" (${tableId}) נשמר בהצלחה!`, 'success');
+      calSelectedTableId = tableId;
       await loadCalibrationTables();
       selectCalibrationTable(tableId, false);
     } else {
