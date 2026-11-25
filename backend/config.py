@@ -22,6 +22,7 @@ class SystemSettings(BaseModel):
     debounce_seconds: float = Field(default=4.0, ge=0.5, le=30.0, description="Debounce buffer time")
     menu_alert_seconds: int = Field(default=120, ge=15, le=600, description="Seconds after seating without waiter visit before no-menu alert")
     service_alert_threshold_seconds: int = Field(default=180, ge=10, description="Seconds before service alert")
+    multi_cam_ai: bool = Field(default=True, description="Monitor all cameras with calibrated tables simultaneously")
     reconnect_interval_seconds: float = Field(default=5.0, ge=1.0)
     server_host: str = Field(default="0.0.0.0")
     server_port: int = Field(default=8085)

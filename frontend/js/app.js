@@ -542,6 +542,8 @@ async function loadSystemSettings() {
     setVal('cfg-alert-thresh', cfg.service_alert_threshold_seconds);
     setVal('cfg-model-name', cfg.model_name || 'yolov8n-pose.pt');
     setVal('cfg-conf', cfg.confidence_threshold);
+    const multiCamChk = document.getElementById('cfg-multi-cam-ai');
+    if (multiCamChk) multiCamChk.checked = cfg.multi_cam_ai !== false;
 
     // Trigger slider labels
     document.getElementById('cfg-target-fps')?.dispatchEvent(new Event('input'));
@@ -667,6 +669,7 @@ async function saveSystemSettings() {
     service_alert_threshold_seconds: parseInt(document.getElementById('cfg-alert-thresh').value),
     model_name: document.getElementById('cfg-model-name')?.value || 'yolov8n-pose.pt',
     confidence_threshold: parseFloat(document.getElementById('cfg-conf').value),
+    multi_cam_ai: document.getElementById('cfg-multi-cam-ai') ? document.getElementById('cfg-multi-cam-ai').checked : true,
     ossia_ip: document.getElementById('cfg-ossia-ip').value.trim(),
     ossia_port: parseInt(document.getElementById('cfg-ossia-port').value),
     ossia_channel: parseInt(document.getElementById('cfg-ossia-ch').value),

@@ -3,7 +3,7 @@ import os
 import subprocess
 import threading
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
@@ -44,6 +44,31 @@ PUBLIC_PATHS = {
 }
 
 
+def _get_telegram_snapshot(channel: Optional[int] = None) -> Optional[bytes]:
+    """Return annotated snapshot for the specific alert camera channel (or active camera for /photo)."""
+    target_ch = channel
+    if target_ch is None:
+        if cv_engine.settings.multi_cam_ai and cv_engine.active_stream_viewers == 0:
+            ai_chs = multi_camera_engine.get_ai_channels()
+            target_ch = cv_engine.settings.ossia_channel if cv_engine.settings.ossia_channel in ai_chs else (ai_chs[0] if ai_chs else cv_engine.settings.ossia_channel)
+        else:
+            return cv_engine.get_snapshot(clean=False)
+
+    if target_ch == cv_engine.settings.ossia_channel and cv_engine.active_stream_viewers > 0 and cv_engine.latest_clean_frame is not None:
+        return cv_engine.get_snapshot(clean=False)
+
+    if target_ch and 1 <= target_ch <= 8:
+        frame = multi_camera_engine.get_snapshot_frame(target_ch)
+        if frame is not None:
+            with multi_camera_engine.lock:
+                dets = list(multi_camera_engine.camera_detections.get(target_ch, []))
+            jpeg = cv_engine.render_annotated_jpeg(frame, target_ch, dets)
+            if jpeg:
+                return jpeg
+
+    return cv_engine.get_snapshot(clean=False)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -51,13 +76,20 @@ async def lifespan(app: FastAPI):
     print("[Server] Initializing database...")
     init_db()
     print("[Server] Starting Computer Vision engines...")
-    multi_camera_engine.set_shared_model(cv_engine.model, cv_engine._model_lock)
+    multi_camera_engine.set_shared_pipeline(
+        model=cv_engine.model,
+        model_lock=cv_engine._model_lock,
+        tracker=cv_engine.tracker,
+        detect_fn=lambda f: cv_engine._run_detection_fast(f, 0.0),
+        event_sink_fn=cv_engine.append_events,
+        is_single_viewer_active_fn=lambda: cv_engine.active_stream_viewers > 0,
+    )
     cv_engine.start()
     multi_camera_engine.start()
     telegram_alerts.bind_handlers(
         state_fn=cv_engine.get_live_state,
         ack_fn=cv_engine.tracker.acknowledge_service,
-        snapshot_fn=lambda: cv_engine.get_snapshot(clean=False),
+        snapshot_fn=_get_telegram_snapshot,
     )
     telegram_alerts.start_polling()
     yield
@@ -447,6 +479,7 @@ def update_settings(new_settings: SystemSettings):
 
     save_settings(new_settings)
     cv_engine.update_settings(new_settings)
+    multi_camera_engine.update_settings(new_settings)
     multi_camera_engine.set_shared_model(cv_engine.model, cv_engine._model_lock)
     return _masked_settings_copy(cv_engine.settings)
 

@@ -29,7 +29,7 @@ class TelegramAlertManager:
         # Runtime callbacks wired from app startup
         self._state_fn: Optional[Callable[[], Dict[str, Any]]] = None
         self._ack_fn: Optional[Callable[[str], bool]] = None
-        self._snapshot_fn: Optional[Callable[[], Optional[bytes]]] = None
+        self._snapshot_fn: Optional[Callable[[Optional[int]], Optional[bytes]]] = None
 
         self.load_config()
 
@@ -62,7 +62,7 @@ class TelegramAlertManager:
         self,
         state_fn: Callable[[], Dict[str, Any]],
         ack_fn: Callable[[str], bool],
-        snapshot_fn: Callable[[], Optional[bytes]],
+        snapshot_fn: Callable[[Optional[int]], Optional[bytes]],
     ):
         self._state_fn = state_fn
         self._ack_fn = ack_fn
@@ -141,9 +141,9 @@ class TelegramAlertManager:
                 ]]
             }
 
-        return self._send_alert_with_optional_photo(message, reply_markup=reply_markup)
+        return self._send_alert_with_optional_photo(message, reply_markup=reply_markup, channel=channel)
 
-    def send_no_menu_alert(self, table_name: str, elapsed_str: str, headcount: int = 1, table_id: str = "") -> bool:
+    def send_no_menu_alert(self, table_name: str, elapsed_str: str, headcount: int = 1, table_id: str = "", channel: Optional[int] = None) -> bool:
         """Send alert when diners have been seated for N minutes without any waiter approaching."""
         with self._lock:
             enabled, token, chat_id = self.enabled, self.bot_token, self.chat_id
@@ -167,13 +167,13 @@ class TelegramAlertManager:
                 ]]
             }
 
-        return self._send_alert_with_optional_photo(message, reply_markup=reply_markup)
+        return self._send_alert_with_optional_photo(message, reply_markup=reply_markup, channel=channel)
 
-    def _send_alert_with_optional_photo(self, message: str, reply_markup: Optional[Dict[str, Any]] = None) -> bool:
+    def _send_alert_with_optional_photo(self, message: str, reply_markup: Optional[Dict[str, Any]] = None, channel: Optional[int] = None) -> bool:
         """Try attaching the annotated live camera snapshot so manager immediately sees who triggered the alert."""
         if self._snapshot_fn:
             try:
-                img = self._snapshot_fn()
+                img = self._snapshot_fn(channel)
                 if img and self.send_photo(img, caption=message, reply_markup=reply_markup):
                     return True
             except Exception as e:
@@ -348,7 +348,7 @@ class TelegramAlertManager:
             self._post_telegram("\n".join(lines), chat_id_override=chat_id)
         elif text in ("/photo", "תמונה"):
             if self._snapshot_fn:
-                img = self._snapshot_fn()
+                img = self._snapshot_fn(None)
                 if img:
                     self.send_photo(img, caption="📸 צילום חי מ-VisionDine AI", chat_id_override=chat_id)
                 else:

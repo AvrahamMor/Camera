@@ -151,8 +151,18 @@ class CVEngine:
             return str(SAMPLE_VIDEO_PATH), "Sample Restaurant Demo"
 
     def _capture_worker(self):
-        """Dedicated high-speed frame grabber to prevent RTSP socket buffer buildup."""
+        """Dedicated high-speed frame grabber; yields Main Stream when Multi-Cam AI handles idle monitoring."""
         while self.running:
+            with self._viewer_lock:
+                has_viewers = self.active_stream_viewers > 0
+
+            if self.settings.multi_cam_ai and self.settings.video_source == "rtsp" and not has_viewers:
+                self.is_connected = True
+                self.is_switching = False
+                self.connection_status = "Multi-Cam AI Active"
+                time.sleep(0.5)
+                continue
+
             source, label = self._get_capture_source()
             print(f"[CVEngine Grabber] Connecting to {label}...")
             self.connection_status = f"Connecting to {label}"
@@ -178,6 +188,9 @@ class CVEngine:
                 now = time.time()
                 with self._viewer_lock:
                     has_viewers = self.active_stream_viewers > 0
+
+                if self.settings.multi_cam_ai and self.settings.video_source == "rtsp" and not has_viewers:
+                    break
 
                 # Throttle YUV->BGR decoding: ~12 FPS when watching live, ~4 FPS when idle
                 decode_interval = 0.08 if has_viewers else 0.25
@@ -219,6 +232,24 @@ class CVEngine:
             target_delay = 1.0 / max(1.0, self.settings.target_fps)
             loop_start = time.time()
             try:
+                with self._viewer_lock:
+                    has_viewers = self.active_stream_viewers > 0
+
+                # When Multi-Cam AI monitors all calibrated cameras and no Single Focus stream is open, yield AI & sync state
+                if self.settings.multi_cam_ai and self.settings.video_source == "rtsp" and not has_viewers:
+                    statuses = self.tracker.get_all_statuses()
+                    with self._lock:
+                        self.latest_table_statuses = statuses
+                    now = time.time()
+                    if (now - self.last_firebase_sync) >= 5.0:
+                        try:
+                            firebase_manager.sync_live_state(self.get_live_state())
+                            self.last_firebase_sync = now
+                        except Exception:
+                            pass
+                    time.sleep(0.5)
+                    continue
+
                 raw_frame = None
                 with self._frame_lock:
                     if self.latest_raw_frame is not None:
@@ -426,19 +457,41 @@ class CVEngine:
 
         return detections
 
+    def append_events(self, events: List[Dict[str, Any]]):
+        if not events:
+            return
+        with self._lock:
+            self.latest_events.extend(events)
+            if len(self.latest_events) > 50:
+                self.latest_events = self.latest_events[-50:]
+
+    def render_annotated_jpeg(self, frame: np.ndarray, channel: int, detections: List[Dict[str, Any]]) -> Optional[bytes]:
+        """Render annotated JPEG snapshot for any camera channel (used by Telegram alerts & /photo)."""
+        if frame is None:
+            return None
+        h, w = frame.shape[:2]
+        statuses = self.tracker.get_all_statuses(w, h)
+        boxes = [d["box"] for d in detections]
+        annotated = self._annotate_frame(frame.copy(), statuses, boxes, channel=channel, detections=detections)
+        ret, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        return buf.tobytes() if ret else None
+
     def _annotate_frame(
         self,
         frame: np.ndarray,
         statuses: List[Dict[str, Any]],
-        person_boxes: List[Tuple[float, float, float, float]]
+        person_boxes: List[Tuple[float, float, float, float]],
+        channel: Optional[int] = None,
+        detections: Optional[List[Dict[str, Any]]] = None,
     ) -> np.ndarray:
         overlay = frame.copy()
         h, w = frame.shape[:2]
         now = time.time()
+        target_ch = channel if channel is not None else self.settings.ossia_channel
 
-        # 1. Draw Table Polygons with status colors (only for tables belonging to active camera)
+        # 1. Draw Table Polygons with status colors (only for tables belonging to target_ch)
         for s in statuses:
-            if s.get("camera_channel", 1) != self.settings.ossia_channel:
+            if s.get("camera_channel", 1) != target_ch:
                 continue
             pts = np.array(s["polygon_px"], np.int32).reshape((-1, 1, 2))
             status = s["status"]
@@ -462,7 +515,7 @@ class CVEngine:
 
         # 2. Draw Table Information Badges
         for s in statuses:
-            if s.get("camera_channel", 1) != self.settings.ossia_channel:
+            if s.get("camera_channel", 1) != target_ch:
                 continue
             pts = np.array(s["polygon_px"], np.int32)
             if len(pts) == 0:
@@ -502,7 +555,7 @@ class CVEngine:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 200, 220), 1, cv2.LINE_AA)
 
         # 3. Draw pinpoint pose skeleton / anchor markers (replaces giant distracting boxes when pose is available)
-        dets = getattr(self, "latest_detections", [])
+        dets = detections if detections is not None else getattr(self, "latest_detections", [])
         if dets:
             for d in dets:
                 x1, y1, x2, y2 = d["box"]
@@ -552,7 +605,7 @@ class CVEngine:
         dot_color = (50, 220, 80) if self.is_connected else (40, 50, 230)
         cv2.circle(frame, (18, 18), 5, dot_color, -1, cv2.LINE_AA)
 
-        hud_title = f"VISIONDINE AI • Cam {self.settings.ossia_channel} • {self.connection_status}"
+        hud_title = f"VISIONDINE AI • Cam {target_ch} • {self.connection_status}"
         cv2.putText(frame, hud_title, (32, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (220, 230, 245), 1, cv2.LINE_AA)
 
         diners_count = sum(s['headcount'] for s in statuses)
@@ -607,9 +660,14 @@ class CVEngine:
                 self.active_stream_viewers = max(0, self.active_stream_viewers - 1)
 
     def get_live_state(self) -> Dict[str, Any]:
-        with self._lock:
-            statuses = list(self.latest_table_statuses)
-            events = list(self.latest_events)
+        if self.settings.multi_cam_ai:
+            statuses = self.tracker.get_all_statuses()
+            with self._lock:
+                events = list(self.latest_events)
+        else:
+            with self._lock:
+                statuses = list(self.latest_table_statuses)
+                events = list(self.latest_events)
 
         total_tables = len(statuses)
         occupied_tables = sum(1 for s in statuses if s["status"] in ("OCCUPIED", "NEEDS_SERVICE"))

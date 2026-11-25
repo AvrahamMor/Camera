@@ -1,3 +1,4 @@
+import threading
 import time
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
@@ -247,7 +248,11 @@ class TableState:
                 elapsed_display = f"{elapsed_min}:{elapsed_sec:02d}"
 
                 telegram_alerts.send_no_menu_alert(
-                    self.table.name, elapsed_display, self.confirmed_headcount, table_id=self.table.id
+                    self.table.name,
+                    elapsed_display,
+                    self.confirmed_headcount,
+                    table_id=self.table.id,
+                    channel=getattr(self.table, "camera_channel", 1),
                 )
                 firebase_manager.log_event({
                     "table_id": self.table.id,
@@ -287,7 +292,11 @@ class TableState:
                 elapsed_sec = int(elapsed_since_visit % 60)
                 elapsed_display = f"{elapsed_min}:{elapsed_sec:02d}"
                 telegram_alerts.send_alert(
-                    self.table.name, elapsed_display, self.confirmed_headcount, table_id=self.table.id
+                    self.table.name,
+                    elapsed_display,
+                    self.confirmed_headcount,
+                    table_id=self.table.id,
+                    channel=getattr(self.table, "camera_channel", 1),
                 )
                 firebase_manager.log_event({
                     "table_id": self.table.id,
@@ -317,18 +326,21 @@ class OccupancyTracker:
     def __init__(self, debounce_sec: float = 4.0, menu_alert_sec: int = 120):
         self.debounce_sec = debounce_sec
         self.menu_alert_sec = menu_alert_sec
+        self._lock = threading.RLock()
         self.states: Dict[str, TableState] = {}
         self._sync_tables()
 
     def set_debounce(self, debounce_sec: float):
-        self.debounce_sec = debounce_sec
-        for s in self.states.values():
-            s.debounce_sec = debounce_sec
+        with self._lock:
+            self.debounce_sec = debounce_sec
+            for s in self.states.values():
+                s.debounce_sec = debounce_sec
 
     def set_menu_alert_seconds(self, menu_alert_sec: int):
-        self.menu_alert_sec = menu_alert_sec
-        for s in self.states.values():
-            s.menu_alert_sec = menu_alert_sec
+        with self._lock:
+            self.menu_alert_sec = menu_alert_sec
+            for s in self.states.values():
+                s.menu_alert_sec = menu_alert_sec
 
     def _sync_tables(self):
         all_tables = tables_manager.get_all()
@@ -344,6 +356,37 @@ class OccupancyTracker:
             if tid not in current_ids:
                 del self.states[tid]
 
+    def _serialize_state(self, state: TableState, now: float, frame_width: int = 1280, frame_height: int = 720) -> Dict[str, Any]:
+        poly_norm = state.table.polygon
+        t_channel = getattr(state.table, 'camera_channel', 1)
+        elapsed = state.get_elapsed_seconds(now)
+        elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+        poly_px = [[int(pt[0] * frame_width), int(pt[1] * frame_height)] for pt in poly_norm]
+        return {
+            "id": state.table.id,
+            "name": state.table.name,
+            "camera_channel": t_channel,
+            "capacity": state.table.capacity,
+            "service_threshold_sec": state.table.service_threshold_sec,
+            "menu_alert_seconds": state.menu_alert_sec,
+            "status": state.status,
+            "menu_served": state.menu_served,
+            "raw_count": state.raw_headcount,
+            "headcount": state.confirmed_headcount,
+            "elapsed_seconds": elapsed,
+            "elapsed_formatted": elapsed_str,
+            "service_alert": state.service_alert_fired,
+            "service_acknowledged": state.service_acknowledged,
+            "polygon_norm": poly_norm,
+            "polygon_px": poly_px,
+        }
+
+    def get_all_statuses(self, frame_width: int = 1280, frame_height: int = 720) -> List[Dict[str, Any]]:
+        with self._lock:
+            self._sync_tables()
+            now = time.time()
+            return [self._serialize_state(state, now, frame_width, frame_height) for state in self.states.values()]
+
     def update(
         self,
         person_boxes: List[Tuple[float, float, float, float]],
@@ -351,74 +394,16 @@ class OccupancyTracker:
         frame_height: int,
         active_channel: Optional[int] = None
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """
-        person_boxes: list of (x1, y1, x2, y2) in pixel coordinates.
-        active_channel: optional channel number (1-8) to restrict bounding box tests.
-        """
-        self._sync_tables()
-        now = time.time()
-
-        person_anchors = []
+        """Legacy box wrapper calling update_detections."""
+        detections = []
         for (x1, y1, x2, y2) in person_boxes:
-            bx = ((x1 + x2) / 2.0) / max(1.0, float(frame_width))
-            # 88% down the box keeps anchor on the seated diner's lower body without overshooting into forward tables
-            by = (y1 + (y2 - y1) * 0.88) / max(1.0, float(frame_height))
-            person_anchors.append((bx, by))
-
-        table_statuses = []
-        emitted_events = []
-
-        for table_id, state in self.states.items():
-            poly_norm = state.table.polygon
-            t_channel = getattr(state.table, 'camera_channel', 1)
-
-            if active_channel is not None and t_channel != active_channel:
-                count = state.raw_headcount
-                ring_count = state.raw_ring_count
-            else:
-                halo_poly = expand_polygon(poly_norm, scale=1.40)
-                count = 0
-                ring_count = 0
-                for anchor in person_anchors:
-                    if is_point_in_polygon(anchor, poly_norm):
-                        count += 1
-                    elif is_point_in_polygon(anchor, halo_poly):
-                        ring_count += 1
-
-            evt_name, evt_data = state.update_raw(count, now, ring_count=ring_count)
-            if evt_name and evt_data:
-                emitted_events.append({"event": evt_name, "data": evt_data})
-
-            elapsed = state.get_elapsed_seconds(now)
-            elapsed_m = elapsed // 60
-            elapsed_s = elapsed % 60
-            elapsed_str = f"{elapsed_m:02d}:{elapsed_s:02d}"
-
-            poly_px = [
-                [int(pt[0] * frame_width), int(pt[1] * frame_height)]
-                for pt in poly_norm
-            ]
-
-            table_statuses.append({
-                "id": state.table.id,
-                "name": state.table.name,
-                "camera_channel": t_channel,
-                "capacity": state.table.capacity,
-                "service_threshold_sec": state.table.service_threshold_sec,
-                "menu_alert_seconds": state.menu_alert_sec,
-                "status": state.status,
-                "menu_served": state.menu_served,
-                "raw_count": state.raw_headcount,
-                "headcount": state.confirmed_headcount,
-                "elapsed_seconds": elapsed,
-                "elapsed_formatted": elapsed_str,
-                "service_alert": state.service_alert_fired,
-                "service_acknowledged": state.service_acknowledged,
-                "polygon_norm": poly_norm,
-                "polygon_px": poly_px
+            detections.append({
+                "box": (x1, y1, x2, y2),
+                "conf": 0.9,
+                "anchor": ((x1 + x2) / 2.0, y1 + (y2 - y1) * 0.82),
+                "keypoints": {},
             })
-
-        return table_statuses, emitted_events
+        return self.update_detections(detections, frame_width, frame_height, active_channel=active_channel, strict_conf=0.38)
 
     def update_detections(
         self,
@@ -430,99 +415,74 @@ class OccupancyTracker:
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Update state machine from pinpoint pose/box detections with confidence hysteresis.
-        - strict detections (conf >= strict_conf) start sessions & detect waiters.
-        - hold detections (conf >= 0.20) keep already-occupied tables locked even when leaning/shifting.
+        Only mutates tables matching active_channel (so multi-camera round-robin never double-ticks other channels).
         """
-        self._sync_tables()
-        now = time.time()
+        with self._lock:
+            self._sync_tables()
+            now = time.time()
 
-        strict_dets = []
-        hold_anchors = []
-        fw = max(1.0, float(frame_width))
-        fh = max(1.0, float(frame_height))
+            strict_dets = []
+            hold_anchors = []
+            fw = max(1.0, float(frame_width))
+            fh = max(1.0, float(frame_height))
 
-        for det in detections:
-            ax, ay = det["anchor"]
-            norm_pt = (ax / fw, ay / fh)
-            hold_anchors.append(norm_pt)
-            if det.get("conf", 0.0) >= strict_conf:
-                kpts = det.get("keypoints") or {}
-                wrists_norm = [
-                    (kpts[wk][0] / fw, kpts[wk][1] / fh)
-                    for wk in ("l_wrist", "r_wrist")
-                    if wk in kpts
-                ]
-                strict_dets.append((norm_pt, wrists_norm))
+            for det in detections:
+                ax, ay = det["anchor"]
+                norm_pt = (ax / fw, ay / fh)
+                hold_anchors.append(norm_pt)
+                if det.get("conf", 0.0) >= strict_conf:
+                    kpts = det.get("keypoints") or {}
+                    wrists_norm = [
+                        (kpts[wk][0] / fw, kpts[wk][1] / fh)
+                        for wk in ("l_wrist", "r_wrist")
+                        if wk in kpts
+                    ]
+                    strict_dets.append((norm_pt, wrists_norm))
 
-        table_statuses = []
-        emitted_events = []
+            table_statuses = []
+            emitted_events = []
 
-        for table_id, state in self.states.items():
-            poly_norm = state.table.polygon
-            t_channel = getattr(state.table, 'camera_channel', 1)
+            for table_id, state in self.states.items():
+                poly_norm = state.table.polygon
+                t_channel = getattr(state.table, 'camera_channel', 1)
 
-            if active_channel is not None and t_channel != active_channel:
-                strict_count = state.raw_headcount
-                hold_count = state.raw_headcount
-                ring_count = state.raw_ring_count
-                hand_reach_count = 0
-            else:
-                # Tight 1.22x edge zone avoids clearing when waiters walk past in the main aisle
-                halo_poly = expand_polygon(poly_norm, scale=1.22)
-                hold_poly = expand_polygon(poly_norm, scale=1.10)
-                strict_count = 0
-                ring_count = 0
-                hand_reach_count = 0
-                for anchor, wrists_norm in strict_dets:
-                    if is_point_in_polygon(anchor, poly_norm):
-                        strict_count += 1
-                    elif is_point_in_polygon(anchor, halo_poly):
-                        ring_count += 1
-                        if any(is_point_in_polygon(w_pt, poly_norm) for w_pt in wrists_norm):
-                            hand_reach_count += 1
+                if active_channel is None or t_channel == active_channel:
+                    # Tight 1.22x edge zone avoids clearing when waiters walk past in the main aisle
+                    halo_poly = expand_polygon(poly_norm, scale=1.22)
+                    hold_poly = expand_polygon(poly_norm, scale=1.10)
+                    strict_count = 0
+                    ring_count = 0
+                    hand_reach_count = 0
+                    for anchor, wrists_norm in strict_dets:
+                        if is_point_in_polygon(anchor, poly_norm):
+                            strict_count += 1
+                        elif is_point_in_polygon(anchor, halo_poly):
+                            ring_count += 1
+                            if any(is_point_in_polygon(w_pt, poly_norm) for w_pt in wrists_norm):
+                                hand_reach_count += 1
 
-                hold_count = 0
-                for anchor in hold_anchors:
-                    if is_point_in_polygon(anchor, hold_poly):
-                        hold_count += 1
+                    hold_count = 0
+                    for anchor in hold_anchors:
+                        if is_point_in_polygon(anchor, hold_poly):
+                            hold_count += 1
 
-            evt_name, evt_data = state.update_raw(
-                strict_count,
-                now,
-                ring_count=ring_count,
-                hold_count=hold_count,
-                hand_reach_count=hand_reach_count,
-            )
-            if evt_name and evt_data:
-                emitted_events.append({"event": evt_name, "data": evt_data})
+                    evt_name, evt_data = state.update_raw(
+                        strict_count,
+                        now,
+                        ring_count=ring_count,
+                        hold_count=hold_count,
+                        hand_reach_count=hand_reach_count,
+                    )
+                    if evt_name and evt_data:
+                        emitted_events.append({"event": evt_name, "data": evt_data})
 
-            elapsed = state.get_elapsed_seconds(now)
-            elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
-            poly_px = [[int(pt[0] * frame_width), int(pt[1] * frame_height)] for pt in poly_norm]
+                table_statuses.append(self._serialize_state(state, now, frame_width, frame_height))
 
-            table_statuses.append({
-                "id": state.table.id,
-                "name": state.table.name,
-                "camera_channel": t_channel,
-                "capacity": state.table.capacity,
-                "service_threshold_sec": state.table.service_threshold_sec,
-                "menu_alert_seconds": state.menu_alert_sec,
-                "status": state.status,
-                "menu_served": state.menu_served,
-                "raw_count": state.raw_headcount,
-                "headcount": state.confirmed_headcount,
-                "elapsed_seconds": elapsed,
-                "elapsed_formatted": elapsed_str,
-                "service_alert": state.service_alert_fired,
-                "service_acknowledged": state.service_acknowledged,
-                "polygon_norm": poly_norm,
-                "polygon_px": poly_px
-            })
-
-        return table_statuses, emitted_events
+            return table_statuses, emitted_events
 
     def acknowledge_service(self, table_id: str) -> bool:
-        if table_id in self.states:
-            self.states[table_id].acknowledge_service()
-            return True
-        return False
+        with self._lock:
+            if table_id in self.states:
+                self.states[table_id].acknowledge_service()
+                return True
+            return False
