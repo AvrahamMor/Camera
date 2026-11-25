@@ -447,6 +447,7 @@ def update_settings(new_settings: SystemSettings):
 
     save_settings(new_settings)
     cv_engine.update_settings(new_settings)
+    multi_camera_engine.set_shared_model(cv_engine.model, cv_engine._model_lock)
     return _masked_settings_copy(cv_engine.settings)
 
 

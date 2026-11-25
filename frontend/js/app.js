@@ -540,6 +540,7 @@ async function loadSystemSettings() {
     setVal('cfg-debounce', cfg.debounce_seconds);
     setVal('cfg-menu-thresh', cfg.menu_alert_seconds || 120);
     setVal('cfg-alert-thresh', cfg.service_alert_threshold_seconds);
+    setVal('cfg-model-name', cfg.model_name || 'yolov8n-pose.pt');
     setVal('cfg-conf', cfg.confidence_threshold);
 
     // Trigger slider labels
@@ -664,6 +665,7 @@ async function saveSystemSettings() {
     debounce_seconds: parseFloat(document.getElementById('cfg-debounce').value),
     menu_alert_seconds: parseInt(document.getElementById('cfg-menu-thresh')?.value || 120),
     service_alert_threshold_seconds: parseInt(document.getElementById('cfg-alert-thresh').value),
+    model_name: document.getElementById('cfg-model-name')?.value || 'yolov8n-pose.pt',
     confidence_threshold: parseFloat(document.getElementById('cfg-conf').value),
     ossia_ip: document.getElementById('cfg-ossia-ip').value.trim(),
     ossia_port: parseInt(document.getElementById('cfg-ossia-port').value),

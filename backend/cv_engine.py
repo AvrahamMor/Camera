@@ -50,6 +50,7 @@ class CVEngine:
         self.latest_events: List[Dict[str, Any]] = []
         self.latest_person_boxes: List[Tuple[float, float, float, float]] = []
         self.latest_person_confs: List[float] = []
+        self.latest_detections: List[Dict[str, Any]] = []
 
         self.is_connected = False
         self.is_switching = False
@@ -235,13 +236,20 @@ class CVEngine:
 
             h, w = raw_frame.shape[:2]
 
-            # 1. Run YOLO inference on 640px image for sharp far-table detection
-            person_boxes, person_confs = self._run_detection_fast(raw_frame, sample_start_time)
-            self.latest_person_boxes = person_boxes
-            self.latest_person_confs = person_confs
+            # 1. Run YOLO / Pose inference on 640px image for pinpoint accuracy
+            detections = self._run_detection_fast(raw_frame, sample_start_time)
+            self.latest_detections = detections
+            self.latest_person_boxes = [d["box"] for d in detections]
+            self.latest_person_confs = [d["conf"] for d in detections]
 
-            # 2. Update occupancy state machine (filtered to active camera channel)
-            statuses, events = self.tracker.update(person_boxes, w, h, active_channel=self.settings.ossia_channel)
+            # 2. Update occupancy state machine with dual-threshold hysteresis
+            statuses, events = self.tracker.update_detections(
+                detections,
+                w,
+                h,
+                active_channel=self.settings.ossia_channel,
+                strict_conf=self.settings.confidence_threshold,
+            )
 
             with self._lock:
                 self.latest_table_statuses = statuses
@@ -295,56 +303,116 @@ class CVEngine:
             sleep_time = max(0.01, target_delay - elapsed_inf)
             time.sleep(sleep_time)
 
-    def _run_detection_fast(self, frame: np.ndarray, sample_start_time: float) -> Tuple[List[Tuple[float, float, float, float]], List[float]]:
-        person_boxes: List[Tuple[float, float, float, float]] = []
-        person_confs: List[float] = []
+    def _extract_pinpoint_anchor(
+        self,
+        box: Tuple[float, float, float, float],
+        kpts_xy: Optional[Any],
+        kpts_conf: Optional[Any],
+        frame_h: int,
+    ) -> Tuple[Tuple[float, float], Dict[str, Tuple[float, float]]]:
+        """Compute a precise seat/body anchor using pose keypoints (hips -> shoulders -> face) when available."""
+        x1, y1, x2, y2 = box
+        cx = (x1 + x2) / 2.0
+        vis_pts: Dict[str, Tuple[float, float]] = {}
+
+        if kpts_xy is not None and kpts_conf is not None and len(kpts_xy) >= 13:
+            def _pt(idx: int, min_c: float = 0.25):
+                c = float(kpts_conf[idx])
+                px, py = float(kpts_xy[idx][0]), float(kpts_xy[idx][1])
+                if c >= min_c and (px > 1.0 or py > 1.0):
+                    return (px, py)
+                return None
+
+            nose = _pt(0, 0.25)
+            l_sh, r_sh = _pt(5, 0.25), _pt(6, 0.25)
+            l_hip, r_hip = _pt(11, 0.25), _pt(12, 0.25)
+
+            if nose:
+                vis_pts["nose"] = nose
+            if l_sh:
+                vis_pts["l_sh"] = l_sh
+            if r_sh:
+                vis_pts["r_sh"] = r_sh
+            if l_hip:
+                vis_pts["l_hip"] = l_hip
+            if r_hip:
+                vis_pts["r_hip"] = r_hip
+
+            # 1. Prefer visible hip midpoint (exact seated center)
+            hips = [p for p in (l_hip, r_hip) if p is not None]
+            if hips:
+                hx = sum(p[0] for p in hips) / len(hips)
+                hy = sum(p[1] for p in hips) / len(hips)
+                return (hx, hy), vis_pts
+
+            # 2. Next prefer shoulder midpoint shifted slightly down to chest/seat
+            shs = [p for p in (l_sh, r_sh) if p is not None]
+            if shs:
+                sx = sum(p[0] for p in shs) / len(shs)
+                sy = sum(p[1] for p in shs) / len(shs)
+                box_h = max(10.0, y2 - y1)
+                return (sx, min(y2, sy + box_h * 0.42)), vis_pts
+
+            # 3. Fallback to face/nose shifted slightly down
+            if nose:
+                return (nose[0], min(y2, nose[1] + frame_h * 0.045)), vis_pts
+
+        # Standard box fallback (82% down box)
+        return (cx, y1 + (y2 - y1) * 0.82), vis_pts
+
+    def _run_detection_fast(self, frame: np.ndarray, sample_start_time: float) -> List[Dict[str, Any]]:
+        detections: List[Dict[str, Any]] = []
         h_f, w_f = frame.shape[:2]
         min_w = w_f * 0.02
         min_h = h_f * 0.04
+        # Run internally at 0.20 so seated hysteresis keeps diners locked even when leaning/shifting
+        internal_conf = min(0.20, float(self.settings.confidence_threshold))
 
         if self.model is not None:
             try:
-                # Run YOLOv8 at imgsz=640 with shared lock for crisp far-table accuracy
                 with self._model_lock:
                     results = self.model.predict(
                         source=frame,
                         imgsz=640,
-                        classes=[0], # Class 0 = person
-                        conf=self.settings.confidence_threshold,
+                        classes=[0],  # Class 0 = person
+                        conf=internal_conf,
                         verbose=False,
                         device="cpu"
                     )
                 for r in results:
                     boxes = r.boxes
-                    for box in boxes:
+                    has_kpts = getattr(r, "keypoints", None) is not None and r.keypoints is not None
+                    for idx, box in enumerate(boxes):
                         b = box.xyxy[0].cpu().numpy()
                         conf_val = float(box.conf[0].cpu().numpy()) if box.conf is not None else 0.0
                         x1, y1, x2, y2 = float(b[0]), float(b[1]), float(b[2]), float(b[3])
-                        # Reject tiny noise / chair artifacts
                         if (x2 - x1) < min_w or (y2 - y1) < min_h:
                             continue
-                        person_boxes.append((x1, y1, x2, y2))
-                        person_confs.append(conf_val)
+
+                        k_xy = r.keypoints.xy[idx].cpu().numpy() if (has_kpts and idx < len(r.keypoints.xy)) else None
+                        k_cf = r.keypoints.conf[idx].cpu().numpy() if (has_kpts and r.keypoints.conf is not None and idx < len(r.keypoints.conf)) else None
+                        anchor, vis_pts = self._extract_pinpoint_anchor((x1, y1, x2, y2), k_xy, k_cf, h_f)
+
+                        detections.append({
+                            "box": (x1, y1, x2, y2),
+                            "conf": conf_val,
+                            "anchor": anchor,
+                            "keypoints": vis_pts,
+                        })
             except Exception as e:
                 print(f"[CVEngine Detection Error]: {e}")
 
         # Synthetic fallback simulation if in sample mode
-        if self.settings.video_source == "sample" and len(person_boxes) == 0:
+        if self.settings.video_source == "sample" and len(detections) == 0:
             t_sec = (time.time() - sample_start_time) % 30.0
             if 5.0 <= t_sec < 25.0:
-                person_boxes.append((575, 330, 615, 390))
-                person_confs.append(0.92)
-                person_boxes.append((665, 330, 705, 390))
-                person_confs.append(0.89)
+                for b, c in [((575, 330, 615, 390), 0.92), ((665, 330, 705, 390), 0.89)]:
+                    detections.append({"box": b, "conf": c, "anchor": ((b[0] + b[2]) / 2.0, b[1] + (b[3] - b[1]) * 0.82), "keypoints": {}})
             if t_sec >= 10.0:
-                person_boxes.append((170, 390, 210, 450))
-                person_confs.append(0.91)
-                person_boxes.append((270, 390, 310, 450))
-                person_confs.append(0.88)
-                person_boxes.append((220, 480, 260, 540))
-                person_confs.append(0.87)
+                for b, c in [((170, 390, 210, 450), 0.91), ((270, 390, 310, 450), 0.88), ((220, 480, 260, 540), 0.87)]:
+                    detections.append({"box": b, "conf": c, "anchor": ((b[0] + b[2]) / 2.0, b[1] + (b[3] - b[1]) * 0.82), "keypoints": {}})
 
-        return person_boxes, person_confs
+        return detections
 
     def _annotate_frame(
         self,
@@ -421,17 +489,45 @@ class CVEngine:
             cv2.putText(frame, sub_text, (bx + 8, by + 34),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 200, 220), 1, cv2.LINE_AA)
 
-        # 3. Draw person boxes, confidence labels & 88% anchor indicators
-        confs = getattr(self, "latest_person_confs", [])
-        for idx, (x1, y1, x2, y2) in enumerate(person_boxes):
-            cx = int((x1 + x2) / 2.0)
-            anchor_y = int(y1 + (y2 - y1) * 0.88)
-            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 220, 255), 2, cv2.LINE_AA)
-            cv2.circle(frame, (cx, anchor_y), 5, (0, 230, 255), -1, cv2.LINE_AA)
-            cv2.circle(frame, (cx, anchor_y), 9, (0, 230, 255), 2, cv2.LINE_AA)
-            if idx < len(confs):
-                cv2.putText(frame, f"{confs[idx]:.2f}", (int(x1), max(14, int(y1) - 6)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 230, 255), 2, cv2.LINE_AA)
+        # 3. Draw pinpoint pose skeleton / anchor markers (replaces giant distracting boxes when pose is available)
+        dets = getattr(self, "latest_detections", [])
+        if dets:
+            for d in dets:
+                x1, y1, x2, y2 = d["box"]
+                ax, ay = int(d["anchor"][0]), int(d["anchor"][1])
+                conf_val = d["conf"]
+                kpts = d.get("keypoints") or {}
+
+                # Draw subtle skeleton & face dot when Pose keypoints exist
+                if kpts:
+                    if "nose" in kpts:
+                        nx, ny = int(kpts["nose"][0]), int(kpts["nose"][1])
+                        cv2.circle(frame, (nx, ny), 5, (255, 220, 60), -1, cv2.LINE_AA)
+                    if "l_sh" in kpts and "r_sh" in kpts:
+                        cv2.line(frame, (int(kpts["l_sh"][0]), int(kpts["l_sh"][1])),
+                                 (int(kpts["r_sh"][0]), int(kpts["r_sh"][1])), (0, 230, 255), 2, cv2.LINE_AA)
+                    if "l_hip" in kpts and "r_hip" in kpts:
+                        cv2.line(frame, (int(kpts["l_hip"][0]), int(kpts["l_hip"][1])),
+                                 (int(kpts["r_hip"][0]), int(kpts["r_hip"][1])), (0, 230, 255), 2, cv2.LINE_AA)
+                else:
+                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 220, 255), 1, cv2.LINE_AA)
+
+                # Pinpoint seated anchor dot + confidence label
+                dot_color = (0, 230, 255) if conf_val >= self.settings.confidence_threshold else (140, 180, 200)
+                cv2.circle(frame, (ax, ay), 6, dot_color, -1, cv2.LINE_AA)
+                cv2.circle(frame, (ax, ay), 10, dot_color, 2, cv2.LINE_AA)
+                cv2.putText(frame, f"{conf_val:.2f}", (ax + 12, ay + 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, dot_color, 2, cv2.LINE_AA)
+        else:
+            confs = getattr(self, "latest_person_confs", [])
+            for idx, (x1, y1, x2, y2) in enumerate(person_boxes):
+                cx = int((x1 + x2) / 2.0)
+                anchor_y = int(y1 + (y2 - y1) * 0.82)
+                cv2.circle(frame, (cx, anchor_y), 6, (0, 230, 255), -1, cv2.LINE_AA)
+                cv2.circle(frame, (cx, anchor_y), 10, (0, 230, 255), 2, cv2.LINE_AA)
+                if idx < len(confs):
+                    cv2.putText(frame, f"{confs[idx]:.2f}", (cx + 12, anchor_y + 4),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 230, 255), 2, cv2.LINE_AA)
 
         # 4. Stream HUD Top Bar
         hud_bg = (14, 18, 24)

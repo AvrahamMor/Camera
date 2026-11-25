@@ -729,6 +729,18 @@
 
             <div>
               <div class="flex justify-between mb-1">
+                <label class="text-slate-300">מודל AI לזיהוי סועדים</label>
+                <span class="text-emerald-400 font-mono text-[11px]">Pose מדויק</span>
+              </div>
+              <select id="cfg-model-name" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white text-xs">
+                <option value="yolov8n-pose.pt">YOLOv8n-Pose — זיהוי פנים, כתפיים ואגן (מומלץ!)</option>
+                <option value="yolov8n.pt">YOLOv8n — זיהוי ריבוע סטנדרטי</option>
+              </select>
+              <p class="text-[11px] text-slate-500 mt-1">מודל Pose מזהה נקודות גוף מדויקות (בלי ריבוע ענק שגולש לשולחן שכן).</p>
+            </div>
+
+            <div>
+              <div class="flex justify-between mb-1">
                 <label class="text-slate-300">סף ביטחון זיהוי אדם (YOLO Confidence)</label>
                 <span id="lbl-conf" class="text-blue-400 font-mono">0.35</span>
               </div>
@@ -850,9 +862,9 @@
   <div id="toast-container" class="fixed bottom-5 left-5 z-50 space-y-2 pointer-events-none"></div>
 
   <!-- JavaScript Modules -->
-  <script src="/static/js/calibration.js?v=4.2"></script>
-  <script src="/static/js/analytics.js?v=4.2"></script>
-  <script src="/static/js/app.js?v=4.2"></script>
+  <script src="/static/js/calibration.js?v=4.3"></script>
+  <script src="/static/js/analytics.js?v=4.3"></script>
+  <script src="/static/js/app.js?v=4.3"></script>
   <script>
     // Initialize Lucide Icons
     lucide.createIcons();

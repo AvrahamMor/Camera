@@ -60,6 +60,7 @@ class TableState:
         self.seated_time: Optional[float] = None
         self.last_state_change: float = time.time()
         self.last_waiter_visit_time: Optional[float] = None
+        self.last_seated_seen_time: Optional[float] = None
 
         self.menu_served: bool = False
         self.no_menu_alert_fired: bool = False
@@ -73,15 +74,23 @@ class TableState:
         # Debounce buffer: list of (timestamp, raw_count)
         self.history: List[Tuple[float, int]] = []
 
-    def update_raw(self, current_raw_count: int, now: float, ring_count: int = 0) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    def update_raw(
+        self,
+        current_raw_count: int,
+        now: float,
+        ring_count: int = 0,
+        hold_count: Optional[int] = None,
+    ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         """
-        Feed new raw observation and update state machine with debouncing + waiter/menu detection.
-        Returns (event_name, event_data) if a state change or alert triggered.
+        Feed new raw observation and update state machine with asymmetric hysteresis:
+        - Seating (FREE -> OCCUPIED) uses strict high-confidence detections + debounce_sec (~4s).
+        - Keeping/Vacating uses sticky hold_count (lower conf >= 0.20) + >=20s continuous empty table.
         """
-        self.raw_headcount = current_raw_count
+        effective_hold = current_raw_count if hold_count is None else max(current_raw_count, hold_count)
+        self.raw_headcount = effective_hold if self.status in ("OCCUPIED", "NEEDS_SERVICE") else current_raw_count
         self.raw_ring_count = ring_count
-        self.history.append((now, current_raw_count))
 
+        self.history.append((now, current_raw_count))
         cutoff = now - self.debounce_sec
         self.history = [(t, c) for t, c in self.history if t >= cutoff]
 
@@ -92,14 +101,12 @@ class TableState:
         is_window_full = window_duration >= (self.debounce_sec * 0.9)
 
         positive_frames = sum(1 for _, c in self.history if c > 0)
-        zero_frames = sum(1 for _, c in self.history if c == 0)
         total_frames = len(self.history)
 
         if total_frames >= 3 and is_window_full:
             majority_positive = (positive_frames / total_frames) >= 0.80 and positive_frames >= 3
-            majority_zero = (zero_frames / total_frames) >= 0.80
 
-            # Transition: FREE -> OCCUPIED
+            # Transition: FREE -> OCCUPIED (strict high-confidence trigger)
             if self.status == "FREE" and majority_positive:
                 recent_counts = [c for _, c in self.history if c > 0]
                 median_count = int(np.median(recent_counts)) if recent_counts else 1
@@ -107,6 +114,7 @@ class TableState:
                 self.confirmed_headcount = max(1, median_count)
                 self.seated_time = now
                 self.last_state_change = now
+                self.last_seated_seen_time = now
                 self.last_waiter_visit_time = None
                 self.menu_served = False
                 self.no_menu_alert_fired = False
@@ -123,28 +131,34 @@ class TableState:
                     "headcount": self.confirmed_headcount
                 }
 
-            # Transition: OCCUPIED / NEEDS_SERVICE -> FREE
-            elif self.status in ("OCCUPIED", "NEEDS_SERVICE") and majority_zero:
-                duration_sec = int(now - (self.seated_time or now))
-                self.status = "FREE"
-                self.confirmed_headcount = 0
-                self.seated_time = None
-                self.last_state_change = now
-                self.last_waiter_visit_time = None
-                self.menu_served = False
-                self.no_menu_alert_fired = False
-                self.service_alert_fired = False
-                self.service_acknowledged = False
-                self.waiter_ring_start = None
-                self.inner_spike_start = None
+        # Sticky occupied hold + 20-second asymmetric vacate timer
+        if self.status in ("OCCUPIED", "NEEDS_SERVICE"):
+            if effective_hold > 0:
+                self.last_seated_seen_time = now
+            else:
+                vacate_sec = max(20.0, self.debounce_sec * 4.0)
+                if self.last_seated_seen_time is not None and (now - self.last_seated_seen_time) >= vacate_sec:
+                    duration_sec = int(now - (self.seated_time or now))
+                    self.status = "FREE"
+                    self.confirmed_headcount = 0
+                    self.seated_time = None
+                    self.last_state_change = now
+                    self.last_seated_seen_time = None
+                    self.last_waiter_visit_time = None
+                    self.menu_served = False
+                    self.no_menu_alert_fired = False
+                    self.service_alert_fired = False
+                    self.service_acknowledged = False
+                    self.waiter_ring_start = None
+                    self.inner_spike_start = None
 
-                record_vacated(self.table.id)
-                event_name = "VACATED"
-                event_data = {
-                    "table_id": self.table.id,
-                    "table_name": self.table.name,
-                    "duration_sec": duration_sec
-                }
+                    record_vacated(self.table.id)
+                    event_name = "VACATED"
+                    event_data = {
+                        "table_id": self.table.id,
+                        "table_name": self.table.name,
+                        "duration_sec": duration_sec
+                    }
 
         # --- Waiter / Menu Approach Detection while occupied ---
         if self.status in ("OCCUPIED", "NEEDS_SERVICE"):
@@ -365,6 +379,90 @@ class OccupancyTracker:
                 [int(pt[0] * frame_width), int(pt[1] * frame_height)]
                 for pt in poly_norm
             ]
+
+            table_statuses.append({
+                "id": state.table.id,
+                "name": state.table.name,
+                "camera_channel": t_channel,
+                "capacity": state.table.capacity,
+                "service_threshold_sec": state.table.service_threshold_sec,
+                "menu_alert_seconds": state.menu_alert_sec,
+                "status": state.status,
+                "menu_served": state.menu_served,
+                "raw_count": state.raw_headcount,
+                "headcount": state.confirmed_headcount,
+                "elapsed_seconds": elapsed,
+                "elapsed_formatted": elapsed_str,
+                "service_alert": state.service_alert_fired,
+                "service_acknowledged": state.service_acknowledged,
+                "polygon_norm": poly_norm,
+                "polygon_px": poly_px
+            })
+
+        return table_statuses, emitted_events
+
+    def update_detections(
+        self,
+        detections: List[Dict[str, Any]],
+        frame_width: int,
+        frame_height: int,
+        active_channel: Optional[int] = None,
+        strict_conf: float = 0.38,
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Update state machine from pinpoint pose/box detections with confidence hysteresis.
+        - strict detections (conf >= strict_conf) start sessions & detect waiters.
+        - hold detections (conf >= 0.20) keep already-occupied tables locked even when leaning/shifting.
+        """
+        self._sync_tables()
+        now = time.time()
+
+        strict_anchors = []
+        hold_anchors = []
+        fw = max(1.0, float(frame_width))
+        fh = max(1.0, float(frame_height))
+
+        for det in detections:
+            ax, ay = det["anchor"]
+            norm_pt = (ax / fw, ay / fh)
+            hold_anchors.append(norm_pt)
+            if det.get("conf", 0.0) >= strict_conf:
+                strict_anchors.append(norm_pt)
+
+        table_statuses = []
+        emitted_events = []
+
+        for table_id, state in self.states.items():
+            poly_norm = state.table.polygon
+            t_channel = getattr(state.table, 'camera_channel', 1)
+
+            if active_channel is not None and t_channel != active_channel:
+                strict_count = state.raw_headcount
+                hold_count = state.raw_headcount
+                ring_count = state.raw_ring_count
+            else:
+                halo_poly = expand_polygon(poly_norm, scale=1.40)
+                hold_poly = expand_polygon(poly_norm, scale=1.10)
+                strict_count = 0
+                ring_count = 0
+                for anchor in strict_anchors:
+                    if is_point_in_polygon(anchor, poly_norm):
+                        strict_count += 1
+                    elif is_point_in_polygon(anchor, halo_poly):
+                        ring_count += 1
+
+                hold_count = 0
+                for anchor in hold_anchors:
+                    if is_point_in_polygon(anchor, hold_poly):
+                        hold_count += 1
+
+            evt_name, evt_data = state.update_raw(strict_count, now, ring_count=ring_count, hold_count=hold_count)
+            if evt_name and evt_data:
+                emitted_events.append({"event": evt_name, "data": evt_data})
+
+            elapsed = state.get_elapsed_seconds(now)
+            elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
+            poly_px = [[int(pt[0] * frame_width), int(pt[1] * frame_height)] for pt in poly_norm]
 
             table_statuses.append({
                 "id": state.table.id,
