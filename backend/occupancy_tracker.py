@@ -132,7 +132,7 @@ class TableState:
                 elapsed_min = int(elapsed // 60)
                 elapsed_sec = int(elapsed % 60)
                 elapsed_display = f"{elapsed_min}:{elapsed_sec:02d}"
-                telegram_alerts.send_alert(self.table.name, elapsed_display, self.confirmed_headcount)
+                telegram_alerts.send_alert(self.table.name, elapsed_display, self.confirmed_headcount, table_id=self.table.id)
                 firebase_manager.log_event({
                     "table_id": self.table.id,
                     "table_name": self.table.name,

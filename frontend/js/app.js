@@ -586,6 +586,35 @@ async function checkFirebaseStatus() {
   } catch (e) { }
 }
 
+async function detectTelegramChatId() {
+  const token = document.getElementById('cfg-telegram-token')?.value.trim() || '';
+  const btn = document.getElementById('btn-detect-chat');
+  if (!token) {
+    showToast('נא להדביק קודם את ה-Bot Token שקיבלת מ-BotFather', 'error');
+    return;
+  }
+  if (btn) btn.disabled = true;
+  showToast('מחפש את השיחה האחרונה מול הבוט בטלגרם...', 'info');
+  try {
+    const res = await fetch('/api/settings/telegram/detect_chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bot_token: token })
+    });
+    const data = await res.json();
+    if (res.ok && data.found && data.chat_id) {
+      setVal('cfg-telegram-chat', data.chat_id);
+      showToast(`זוהה בהצלחה! (${data.chat_label} • ${data.chat_id})`, 'success');
+    } else {
+      showToast(data.detail || 'לא זוהתה הודעה. פתח את הבוט בטלגרם, לחץ Start ושלח "היי" ונסה שוב.', 'error');
+    }
+  } catch (e) {
+    showToast('שגיאת תקשורת עם השרת', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function testTelegramAlert() {
   const token = document.getElementById('cfg-telegram-token').value.trim();
   const chat = document.getElementById('cfg-telegram-chat').value.trim();

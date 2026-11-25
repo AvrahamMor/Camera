@@ -749,7 +749,12 @@
             </div>
             <div>
               <label class="block text-slate-400 mb-1">Telegram Chat ID (קבוצה או משתמש)</label>
-              <input type="text" id="cfg-telegram-chat" placeholder="לדוגמה: -1001234567890 או 98765432" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+              <div class="flex space-x-2 space-x-reverse">
+                <input type="text" id="cfg-telegram-chat" placeholder="לדוגמה: -1001234567890 או 98765432" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white font-mono text-xs">
+                <button onclick="detectTelegramChatId()" id="btn-detect-chat" type="button" class="shrink-0 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 font-semibold transition text-xs">
+                  אתר Chat ID
+                </button>
+              </div>
             </div>
           </div>
           <div class="flex items-center justify-between pt-2">
@@ -836,9 +841,9 @@
   <div id="toast-container" class="fixed bottom-5 left-5 z-50 space-y-2 pointer-events-none"></div>
 
   <!-- JavaScript Modules -->
-  <script src="/static/js/calibration.js?v=4.0"></script>
-  <script src="/static/js/analytics.js?v=4.0"></script>
-  <script src="/static/js/app.js?v=4.0"></script>
+  <script src="/static/js/calibration.js?v=4.1"></script>
+  <script src="/static/js/analytics.js?v=4.1"></script>
+  <script src="/static/js/app.js?v=4.1"></script>
   <script>
     // Initialize Lucide Icons
     lucide.createIcons();

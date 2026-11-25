@@ -40,6 +40,12 @@ class CameraGrabber:
 
     def _loop(self):
         while self.running:
+            # Close RTSP socket completely when no matrix viewer or snapshot demand is active (0 Mbps idle)
+            if not self.has_viewers_fn():
+                self.is_connected = False
+                time.sleep(0.5)
+                continue
+
             cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
@@ -50,10 +56,9 @@ class CameraGrabber:
 
             self.is_connected = True
             last_decode = 0.0
-            while self.running:
+            while self.running and self.has_viewers_fn():
                 now = time.time()
-                # ~8 FPS decode when matrix viewer active, ~1 FPS when idle (keeps snapshots instant with minimal CPU)
-                decode_interval = 0.12 if self.has_viewers_fn() else 1.0
+                decode_interval = 0.12
                 if (now - last_decode) < decode_interval:
                     if not cap.grab():
                         self.is_connected = False
@@ -75,7 +80,8 @@ class CameraGrabber:
                 time.sleep(0.03)
 
             cap.release()
-            time.sleep(1.5)
+            self.is_connected = False
+            time.sleep(0.5)
 
     def get_frame(self) -> Optional[np.ndarray]:
         with self.lock:
@@ -107,6 +113,7 @@ class MultiCameraEngine:
         self.lock = threading.Lock()
         self._viewer_lock = threading.Lock()
         self.active_viewers = 0
+        self.last_demand_time = 0.0
 
         self.tracker = OccupancyTracker(debounce_sec=self.settings.debounce_seconds)
         self.camera_person_boxes: Dict[int, List[Tuple[float, float, float, float]]] = {
@@ -123,9 +130,31 @@ class MultiCameraEngine:
         self.model = model
         self.model_lock = model_lock
 
+    def touch_demand(self):
+        with self._viewer_lock:
+            self.last_demand_time = time.time()
+
     def has_active_viewers(self) -> bool:
         with self._viewer_lock:
+            return self.active_viewers > 0 or (time.time() - self.last_demand_time) < 45.0
+
+    def has_matrix_viewers_only(self) -> bool:
+        with self._viewer_lock:
             return self.active_viewers > 0
+
+    def get_snapshot_frame(self, channel: int) -> Optional[np.ndarray]:
+        self.touch_demand()
+        grabber = self.grabbers.get(channel)
+        if not grabber:
+            return None
+        # Wait briefly if grabber just woke up from idle
+        deadline = time.time() + 2.5
+        while time.time() < deadline:
+            frame = grabber.get_frame()
+            if frame is not None and (time.time() - grabber.last_frame_time) < 10.0:
+                return frame
+            time.sleep(0.15)
+        return grabber.get_frame()
 
     def _init_grabbers(self):
         user = self.settings.ossia_user or "admin"
@@ -176,7 +205,7 @@ class MultiCameraEngine:
         blank_tile = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
 
         while self.running:
-            if not self.has_active_viewers():
+            if not self.has_matrix_viewers_only():
                 time.sleep(0.4)
                 continue
 
@@ -250,7 +279,7 @@ class MultiCameraEngine:
         """Runs throttled round-robin YOLO box overlay ONLY when matrix viewer is open."""
         idx = 0
         while self.running:
-            if not self.has_active_viewers() or self.model is None:
+            if not self.has_matrix_viewers_only() or self.model is None:
                 time.sleep(0.4)
                 continue
 

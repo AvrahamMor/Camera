@@ -47,15 +47,23 @@ PUBLIC_PATHS = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    from backend.telegram_alerts import telegram_alerts
     print("[Server] Initializing database...")
     init_db()
     print("[Server] Starting Computer Vision engines...")
     multi_camera_engine.set_shared_model(cv_engine.model, cv_engine._model_lock)
     cv_engine.start()
     multi_camera_engine.start()
+    telegram_alerts.bind_handlers(
+        state_fn=cv_engine.get_live_state,
+        ack_fn=cv_engine.tracker.acknowledge_service,
+        snapshot_fn=lambda: cv_engine.get_snapshot(clean=False),
+    )
+    telegram_alerts.start_polling()
     yield
     # Shutdown
     print("[Server] Stopping Computer Vision engines...")
+    telegram_alerts.stop_polling()
     cv_engine.stop()
     multi_camera_engine.stop()
 
@@ -301,13 +309,11 @@ def video_feed_matrix():
 def get_snapshot(channel: int = 0, clean: bool = True):
     """Grab a high-resolution snapshot for the interactive ROI calibration tool."""
     if 1 <= channel <= 8:
-        grabber = multi_camera_engine.grabbers.get(channel)
-        if grabber:
-            frame = grabber.get_frame()
-            if frame is not None:
-                ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
-                if ret:
-                    return Response(content=buf.tobytes(), media_type="image/jpeg")
+        frame = multi_camera_engine.get_snapshot_frame(channel)
+        if frame is not None:
+            ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if ret:
+                return Response(content=buf.tobytes(), media_type="image/jpeg")
 
     jpeg_bytes = cv_engine.get_snapshot(clean=clean)
     if not jpeg_bytes:
@@ -482,6 +488,14 @@ def get_telegram_settings():
         "chat_id": telegram_alerts.chat_id,
         "enabled": telegram_alerts.enabled
     }
+
+
+@app.post("/api/settings/telegram/detect_chat")
+def detect_telegram_chat(payload: Dict[str, Any]):
+    from backend.telegram_alerts import telegram_alerts
+    incoming_token = str(payload.get("bot_token", "")).strip()
+    token = telegram_alerts.bot_token if (not incoming_token or is_masked_value(incoming_token)) else incoming_token
+    return telegram_alerts.detect_latest_chat(token)
 
 
 @app.post("/api/settings/telegram")
