@@ -166,11 +166,11 @@ class TableState:
 
         # --- Waiter / Menu Approach Detection while occupied ---
         if self.status in ("OCCUPIED", "NEEDS_SERVICE"):
-            required_dwell = 8.0 if self.status == "NEEDS_SERVICE" else 6.0
-            required_reach = 2.0 if self.status == "NEEDS_SERVICE" else 1.5
+            required_dwell = 4.0
+            required_reach = 1.5
             served_now = False
 
-            # Signal A: Waiter at table edge reaches wrist/hand onto table surface (placing menus)
+            # Signal A: Waiter beside table reaches wrist/hand onto table surface
             if hand_reach_count >= 1:
                 if self.hand_reach_start is None:
                     self.hand_reach_start = now
@@ -179,7 +179,7 @@ class TableState:
             else:
                 self.hand_reach_start = None
 
-            # Signal B: Waiter stands stationary right beside table edge (tight 1.22x ring) for >= 6.0s
+            # Signal B: Waiter stands beside table (1.45x edge ring) for >= 4.0s
             if ring_count >= 1:
                 if self.waiter_ring_start is None:
                     self.waiter_ring_start = now
@@ -189,20 +189,11 @@ class TableState:
                 self.waiter_ring_start = None
 
             if served_now:
-                self.last_waiter_visit_time = now
-                if not self.menu_served:
-                    self.menu_served = True
-                    if self.status == "NEEDS_SERVICE":
-                        self.status = "OCCUPIED"
-                        self.service_acknowledged = True
-                    event_name = event_name or "MENU_SERVED"
-                    event_data = event_data or {
-                        "table_id": self.table.id,
-                        "table_name": self.table.name,
-                        "headcount": self.confirmed_headcount,
-                    }
+                evt_name, evt_data = self._mark_waiter_arrived(now)
+                event_name = event_name or evt_name
+                event_data = event_data or evt_data
 
-            # Signal C: Extra person stepped inside polygon for 5s..20s then left
+            # Signal C: Extra person stepped inside polygon for 4s..20s then left
             if current_raw_count > self.confirmed_headcount:
                 if self.inner_spike_start is None:
                     self.inner_spike_start = now
@@ -213,19 +204,10 @@ class TableState:
             else:
                 if self.inner_spike_start is not None:
                     spike_dur = now - self.inner_spike_start
-                    if 5.0 <= spike_dur < 20.0:
-                        self.last_waiter_visit_time = now
-                        if not self.menu_served:
-                            self.menu_served = True
-                            if self.status == "NEEDS_SERVICE":
-                                self.status = "OCCUPIED"
-                                self.service_acknowledged = True
-                            event_name = event_name or "MENU_SERVED"
-                            event_data = event_data or {
-                                "table_id": self.table.id,
-                                "table_name": self.table.name,
-                                "headcount": self.confirmed_headcount,
-                            }
+                    if 4.0 <= spike_dur < 20.0:
+                        evt_name, evt_data = self._mark_waiter_arrived(now)
+                        event_name = event_name or evt_name
+                        event_data = event_data or evt_data
                     self.inner_spike_start = None
 
         # --- Check 2-Minute No-Menu Alert (Unattended Seating) ---
@@ -316,10 +298,48 @@ class TableState:
     def acknowledge_service(self):
         self.service_acknowledged = True
         self.menu_served = True
+        self.service_alert_fired = False
         self.last_waiter_visit_time = time.time()
         if self.status == "NEEDS_SERVICE":
             self.status = "OCCUPIED"
         acknowledge_service(self.table.id)
+
+    def _mark_waiter_arrived(self, now: float) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """Record a confirmed waiter arrival and emit follow-up updates if an alert was active."""
+        self.last_waiter_visit_time = now
+        was_alerting = self.status == "NEEDS_SERVICE" or self.service_alert_fired
+        first_menu = not self.menu_served
+        if not first_menu and not was_alerting:
+            return None, None
+
+        self.menu_served = True
+        if was_alerting:
+            self.status = "OCCUPIED"
+            self.service_alert_fired = False
+            self.service_acknowledged = True
+            acknowledge_service(self.table.id)
+
+            elapsed = (now - self.seated_time) if self.seated_time else 0
+            elapsed_display = f"{int(elapsed // 60)}:{int(elapsed % 60):02d}"
+            telegram_alerts.send_waiter_arrived_update(
+                self.table.name,
+                elapsed_display,
+                table_id=self.table.id,
+            )
+            firebase_manager.log_event({
+                "table_id": self.table.id,
+                "table_name": self.table.name,
+                "event_type": "WAITER_ARRIVED",
+                "elapsed_sec": int(elapsed),
+                "headcount": self.confirmed_headcount,
+            })
+
+        return "MENU_SERVED", {
+            "table_id": self.table.id,
+            "table_name": self.table.name,
+            "headcount": self.confirmed_headcount,
+            "after_alert": was_alerting,
+        }
 
 
 class OccupancyTracker:
@@ -421,8 +441,10 @@ class OccupancyTracker:
             self._sync_tables()
             now = time.time()
 
-            strict_dets = []
+            strict_anchors = []
+            waiter_dets = []
             hold_anchors = []
+            waiter_conf = max(0.28, strict_conf - 0.08)
             fw = max(1.0, float(frame_width))
             fh = max(1.0, float(frame_height))
 
@@ -430,14 +452,22 @@ class OccupancyTracker:
                 ax, ay = det["anchor"]
                 norm_pt = (ax / fw, ay / fh)
                 hold_anchors.append(norm_pt)
-                if det.get("conf", 0.0) >= strict_conf:
+                conf = det.get("conf", 0.0)
+                if conf >= strict_conf:
+                    strict_anchors.append(norm_pt)
+                if conf >= waiter_conf:
                     kpts = det.get("keypoints") or {}
+                    ring_pts = [norm_pt] + [
+                        (kpts[sk][0] / fw, kpts[sk][1] / fh)
+                        for sk in ("l_sh", "r_sh")
+                        if sk in kpts
+                    ]
                     wrists_norm = [
                         (kpts[wk][0] / fw, kpts[wk][1] / fh)
                         for wk in ("l_wrist", "r_wrist")
                         if wk in kpts
                     ]
-                    strict_dets.append((norm_pt, wrists_norm))
+                    waiter_dets.append((norm_pt, ring_pts, wrists_norm))
 
             table_statuses = []
             emitted_events = []
@@ -447,24 +477,31 @@ class OccupancyTracker:
                 t_channel = getattr(state.table, 'camera_channel', 1)
 
                 if active_channel is None or t_channel == active_channel:
-                    # Tight 1.22x edge zone avoids clearing when waiters walk past in the main aisle
-                    halo_poly = expand_polygon(poly_norm, scale=1.22)
+                    # 1.45x halo catches waiters standing beside the table in the aisle (including backs turned)
+                    halo_poly = expand_polygon(poly_norm, scale=1.45)
                     hold_poly = expand_polygon(poly_norm, scale=1.10)
-                    strict_count = 0
+                    other_polys = [
+                        st.table.polygon
+                        for tid, st in self.states.items()
+                        if tid != table_id
+                        and getattr(st.table, 'camera_channel', 1) == t_channel
+                        and len(st.table.polygon) >= 3
+                    ]
+
+                    strict_count = sum(1 for pt in strict_anchors if is_point_in_polygon(pt, poly_norm))
                     ring_count = 0
                     hand_reach_count = 0
-                    for anchor, wrists_norm in strict_dets:
+                    for anchor, ring_pts, wrists_norm in waiter_dets:
                         if is_point_in_polygon(anchor, poly_norm):
-                            strict_count += 1
-                        elif is_point_in_polygon(anchor, halo_poly):
+                            continue
+                        if any(is_point_in_polygon(anchor, op) for op in other_polys):
+                            continue
+                        if any(is_point_in_polygon(pt, halo_poly) for pt in ring_pts):
                             ring_count += 1
                             if any(is_point_in_polygon(w_pt, poly_norm) for w_pt in wrists_norm):
                                 hand_reach_count += 1
 
-                    hold_count = 0
-                    for anchor in hold_anchors:
-                        if is_point_in_polygon(anchor, hold_poly):
-                            hold_count += 1
+                    hold_count = sum(1 for anchor in hold_anchors if is_point_in_polygon(anchor, hold_poly))
 
                     evt_name, evt_data = state.update_raw(
                         strict_count,

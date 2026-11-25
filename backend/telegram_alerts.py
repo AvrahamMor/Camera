@@ -25,6 +25,7 @@ class TelegramAlertManager:
         self._poll_running = False
         self._poll_thread: Optional[threading.Thread] = None
         self._last_update_id = 0
+        self._alert_message_ids: Dict[str, int] = {}
 
         # Runtime callbacks wired from app startup
         self._state_fn: Optional[Callable[[], Dict[str, Any]]] = None
@@ -141,7 +142,7 @@ class TelegramAlertManager:
                 ]]
             }
 
-        return self._send_alert_with_optional_photo(message, reply_markup=reply_markup, channel=channel)
+        return self._send_alert_with_optional_photo(message, reply_markup=reply_markup, channel=channel, table_id=table_id)
 
     def send_no_menu_alert(self, table_name: str, elapsed_str: str, headcount: int = 1, table_id: str = "", channel: Optional[int] = None) -> bool:
         """Send alert when diners have been seated for N minutes without any waiter approaching."""
@@ -167,20 +168,60 @@ class TelegramAlertManager:
                 ]]
             }
 
-        return self._send_alert_with_optional_photo(message, reply_markup=reply_markup, channel=channel)
+        return self._send_alert_with_optional_photo(message, reply_markup=reply_markup, channel=channel, table_id=table_id)
 
-    def _send_alert_with_optional_photo(self, message: str, reply_markup: Optional[Dict[str, Any]] = None, channel: Optional[int] = None) -> bool:
+    def send_waiter_arrived_update(self, table_name: str, elapsed_str: str, table_id: str = "") -> bool:
+        """Notify Telegram as a direct reply when a waiter arrives at a table that had an active alert."""
+        with self._lock:
+            enabled, token, chat_id = self.enabled, self.bot_token, self.chat_id
+            reply_msg_id = self._alert_message_ids.pop(table_id, None) if table_id else None
+        if not enabled or not token or not chat_id:
+            return False
+
+        message = (
+            f"✅ *עדכון שירות — מלצר ניגש לשולחן!*\n"
+            f"📍 *שולחן:* {table_name}\n"
+            f"⏱️ *לאחר:* `{elapsed_str}` דקות\n"
+            f"✨ _המערכת זיהתה שמלצר הגיע לטפל בשולחן._"
+        )
+        return self._post_telegram(message, reply_to_message_id=reply_msg_id)
+
+    def _send_alert_with_optional_photo(
+        self,
+        message: str,
+        reply_markup: Optional[Dict[str, Any]] = None,
+        channel: Optional[int] = None,
+        table_id: str = "",
+    ) -> bool:
         """Try attaching the annotated live camera snapshot so manager immediately sees who triggered the alert."""
         if self._snapshot_fn:
             try:
                 img = self._snapshot_fn(channel)
-                if img and self.send_photo(img, caption=message, reply_markup=reply_markup):
-                    return True
+                if img:
+                    msg_id = self.send_photo(img, caption=message, reply_markup=reply_markup, return_message_id=True)
+                    if msg_id:
+                        if table_id and isinstance(msg_id, int):
+                            with self._lock:
+                                self._alert_message_ids[table_id] = msg_id
+                        return True
             except Exception as e:
                 print(f"[Telegram Snapshot Alert Fallback]: {e}")
-        return self._post_telegram(message, reply_markup=reply_markup)
+        msg_id = self._post_telegram(message, reply_markup=reply_markup, return_message_id=True)
+        if msg_id:
+            if table_id and isinstance(msg_id, int):
+                with self._lock:
+                    self._alert_message_ids[table_id] = msg_id
+            return True
+        return False
 
-    def _post_telegram(self, text: str, chat_id_override: Optional[str] = None, reply_markup: Optional[Dict[str, Any]] = None) -> bool:
+    def _post_telegram(
+        self,
+        text: str,
+        chat_id_override: Optional[str] = None,
+        reply_markup: Optional[Dict[str, Any]] = None,
+        reply_to_message_id: Optional[int] = None,
+        return_message_id: bool = False,
+    ):
         with self._lock:
             token = self.bot_token
             target_chat = chat_id_override or self.chat_id
@@ -195,10 +236,16 @@ class TelegramAlertManager:
         }
         if reply_markup:
             payload["reply_markup"] = reply_markup
+        if reply_to_message_id:
+            payload["reply_to_message_id"] = reply_to_message_id
 
         try:
             resp = requests.post(url, json=payload, timeout=12)
-            return resp.status_code == 200
+            if resp.status_code == 200:
+                if return_message_id:
+                    return resp.json().get("result", {}).get("message_id") or True
+                return True
+            return False
         except Exception as e:
             print(f"[Telegram Alert Error] {e}")
             return False
@@ -209,7 +256,8 @@ class TelegramAlertManager:
         caption: str = "",
         chat_id_override: Optional[str] = None,
         reply_markup: Optional[Dict[str, Any]] = None,
-    ) -> bool:
+        return_message_id: bool = False,
+    ):
         with self._lock:
             token = self.bot_token
             target_chat = chat_id_override or self.chat_id
@@ -231,7 +279,11 @@ class TelegramAlertManager:
                 files={"photo": ("snapshot.jpg", photo_bytes, "image/jpeg")},
                 timeout=12,
             )
-            return resp.status_code == 200
+            if resp.status_code == 200:
+                if return_message_id:
+                    return resp.json().get("result", {}).get("message_id") or True
+                return True
+            return False
         except Exception as e:
             print(f"[Telegram Photo Error] {e}")
             return False
