@@ -649,7 +649,7 @@ async function saveSystemSettings() {
         await fetch('/api/settings/telegram', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ bot_token: tToken, chat_id: tChat, enabled: tEnabled })
+          body: JSON.stringify({ bot_token: tToken, chat_id: tChat, enabled: tEnabled, send_test: false })
         });
       }
 
@@ -659,8 +659,11 @@ async function saveSystemSettings() {
         const img = document.getElementById('live-video-stream');
         if (img) img.src = '/api/video_feed?t=' + Date.now();
       }, 1000);
+    } else if (res.status === 401) {
+      window.location.href = '/login';
     } else {
-      showToast('שגיאה בשמירת ההגדרות', 'error');
+      const errData = await res.json().catch(() => ({}));
+      showToast(errData.detail || 'שגיאה בשמירת ההגדרות', 'error');
     }
   } catch (err) {
     console.error('Save settings error:', err);
@@ -768,4 +771,38 @@ function showToast(message, type = 'info') {
     toast.classList.add('translate-y-2', 'opacity-0');
     setTimeout(() => toast.remove(), 300);
   }, 3500);
+}
+
+// --- Authentication Helpers ---
+async function logoutUser() {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST' });
+  } catch (e) {}
+  window.location.href = '/login';
+}
+
+async function changeAdminPassword() {
+  const curPw = document.getElementById('cfg-current-password')?.value || '';
+  const newPw = document.getElementById('cfg-new-password')?.value || '';
+  if (!curPw || newPw.length < 8) {
+    showToast('נא להזין סיסמה נוכחית וסיסמה חדשה (לפחות 8 תווים)', 'error');
+    return;
+  }
+  try {
+    const res = await fetch('/api/auth/change_password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: curPw, new_password: newPw })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      showToast('סיסמת המנהל עודכנה בהצלחה!', 'success');
+      document.getElementById('cfg-current-password').value = '';
+      document.getElementById('cfg-new-password').value = '';
+    } else {
+      showToast(data.detail || 'שגיאה בעדכון הסיסמה', 'error');
+    }
+  } catch (e) {
+    showToast('שגיאת תקשורת עם השרת', 'error');
+  }
 }

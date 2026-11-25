@@ -1,8 +1,9 @@
 import json
+import re
 import threading
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TABLES_FILE = BASE_DIR / "config" / "tables_config.json"
@@ -15,6 +16,14 @@ class TableModel(BaseModel):
     service_threshold_sec: int = Field(default=180, ge=10)
     polygon: List[List[float]]  # List of [x, y] in normalized [0.0 .. 1.0] coordinates
     old_id: Optional[str] = None  # If renaming from an existing table ID
+
+    @field_validator("id")
+    @classmethod
+    def validate_table_id(cls, v: str) -> str:
+        clean = (v or "").strip()
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", clean):
+            raise ValueError("Table ID must contain only English letters, numbers, '_' or '-' (max 64 chars)")
+        return clean
 
 class TablesManager:
     def __init__(self, config_path: Path = TABLES_FILE):

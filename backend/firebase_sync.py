@@ -61,16 +61,6 @@ class FirebaseManager:
             }, merge=True)
         except Exception as e:
             print(f"[Firebase Sync Error] sync_live_state: {e}")
-            doc_ref.set({
-                "timestamp": firestore.SERVER_TIMESTAMP,
-                "kpis": state.get("kpis", {}),
-                "active_diners": state.get("kpis", {}).get("active_diners", 0),
-                "pending_alerts_count": state.get("kpis", {}).get("pending_alerts_count", 0),
-                "tables": state.get("tables", []),
-                "alerts": state.get("alerts", [])
-            }, merge=True)
-        except Exception as e:
-            print(f"[Firebase Sync Error] sync_live_state: {e}")
 
     def log_session(self, session_data: Dict[str, Any]):
         """Log completed dining session to Cloud Firestore."""
