@@ -806,3 +806,25 @@ async function changeAdminPassword() {
     showToast('שגיאת תקשורת עם השרת', 'error');
   }
 }
+
+async function triggerGitUpdate() {
+  const btn = document.getElementById('btn-git-update');
+  if (btn) btn.disabled = true;
+  showToast('בודק ומושך עדכונים מ-GitHub...', 'info');
+  try {
+    const res = await fetch('/api/system/git_update', { method: 'POST' });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      showToast(data.message, 'success');
+      if (data.updated) {
+        setTimeout(() => { window.location.reload(); }, 7000);
+      }
+    } else {
+      showToast(data.detail || 'לא ניתן לעדכן מ-GitHub', 'error');
+    }
+  } catch (e) {
+    showToast('שגיאת תקשורת עם השרת', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}

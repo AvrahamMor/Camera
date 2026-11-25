@@ -1,4 +1,7 @@
 import asyncio
+import os
+import subprocess
+import threading
 from pathlib import Path
 from typing import Dict, Any, List
 from contextlib import asynccontextmanager
@@ -47,6 +50,7 @@ async def lifespan(app: FastAPI):
     print("[Server] Initializing database...")
     init_db()
     print("[Server] Starting Computer Vision engines...")
+    multi_camera_engine.set_shared_model(cv_engine.model, cv_engine._model_lock)
     cv_engine.start()
     multi_camera_engine.start()
     yield
@@ -501,6 +505,48 @@ def get_firebase_status():
     return {
         "configured": firebase_manager.is_configured
     }
+
+
+@app.post("/api/system/git_update")
+def system_git_update():
+    """Pull latest updates from GitHub origin/main and trigger watchdog restart."""
+    if not (BASE_DIR / ".git").exists():
+        raise HTTPException(
+            status_code=400,
+            detail="תיקיית הפרויקט במחשב זה לא חוברה עדיין ל-Git (הורדה כ-ZIP). חבר אותה פעם אחת ל-Git כדי לאפשר עדכון בלחיצה.",
+        )
+
+    try:
+        res = subprocess.run(
+            ["git", "pull", "origin", "main"],
+            cwd=str(BASE_DIR),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        out = (res.stdout or "") + ("\n" + res.stderr if res.stderr else "")
+        if res.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"שגיאת Git: {out.strip()}")
+
+        if "Already up to date." in res.stdout:
+            return {"success": True, "updated": False, "message": "השרת כבר מעודכן לגרסה האחרונה!", "output": out.strip()}
+
+        def _delayed_exit():
+            import time
+            time.sleep(1.5)
+            os._exit(0)  # Watchdog loop in start_24_7.bat restarts cleanly in 5s
+
+        threading.Thread(target=_delayed_exit, daemon=True).start()
+        return {
+            "success": True,
+            "updated": True,
+            "message": "הגרסה החדשה ירדה בהצלחה! השרת מתאתחל כעת (יחזור תוך ~6 שניות).",
+            "output": out.strip(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"עדכון נכשל: {e}")
 
 
 # --- Analytics Endpoints ---

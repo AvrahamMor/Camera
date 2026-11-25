@@ -14,7 +14,7 @@ Write-Host "Setting up auto-start task '$TaskName' for: $ProjectDir" -Foreground
 
 # Run hidden/minimized on logon (no UAC needed for current user)
 $Action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c start /min `"`" `"$RunnerBat`"" -WorkingDirectory $ProjectDir
-$Trigger = New-ScheduledTaskTrigger -AtLogOn
+$Trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
 $Settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `

@@ -5,6 +5,11 @@ import threading
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
+import torch
+
+# Cap CPU thread pools so PyTorch/OpenCV do not saturate low-power CPUs
+torch.set_num_threads(2)
+cv2.setNumThreads(2)
 
 # Set OpenCV FFMPEG options for RTSP over TCP with short probe timeout
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;3000000"
@@ -25,6 +30,9 @@ class CVEngine:
 
         self._lock = threading.Lock()
         self._frame_lock = threading.Lock()
+        self._model_lock = threading.Lock()
+        self._viewer_lock = threading.Lock()
+        self.active_stream_viewers = 0
         self.running = False
 
         self.capture_thread: Optional[threading.Thread] = None
@@ -156,7 +164,24 @@ class CVEngine:
             self.connection_status = "Online / Streaming"
             print(f"[CVEngine Grabber] Connected to {label}")
 
+            last_decode_time = 0.0
             while self.running and not self.is_switching:
+                now = time.time()
+                with self._viewer_lock:
+                    has_viewers = self.active_stream_viewers > 0
+
+                # Throttle YUV->BGR decoding: ~12 FPS when watching live, ~4 FPS when idle
+                decode_interval = 0.08 if has_viewers else 0.25
+                if (now - last_decode_time) < decode_interval:
+                    if not cap.grab():
+                        if self.settings.video_source in ("file", "sample"):
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                            continue
+                        print("[CVEngine Grabber] Frame grab dropped, reconnecting...")
+                        break
+                    time.sleep(0.03)
+                    continue
+
                 ret, frame = cap.read()
                 if not ret or frame is None:
                     if self.settings.video_source in ("file", "sample"):
@@ -166,11 +191,11 @@ class CVEngine:
                         print("[CVEngine Grabber] Frame read dropped, reconnecting...")
                         break
 
+                last_decode_time = now
                 with self._frame_lock:
                     self.latest_raw_frame = frame
 
-                # Small sleep to match source framerate and prevent CPU maxing
-                time.sleep(0.015)
+                time.sleep(0.02)
 
             cap.release()
             time.sleep(0.5)
@@ -219,29 +244,33 @@ class CVEngine:
                     if len(self.latest_events) > 50:
                         self.latest_events = self.latest_events[-50:]
 
-            # 3. Annotate frame
-            annotated = self._annotate_frame(raw_frame, statuses, person_boxes)
+            with self._viewer_lock:
+                has_viewers = self.active_stream_viewers > 0
 
-            # 4. Downscale for web MJPEG streaming (1280px max width for silky smooth 20+ FPS)
-            if w > 1280:
-                scale = 1280.0 / w
-                stream_preview = cv2.resize(annotated, (1280, int(h * scale)), interpolation=cv2.INTER_LINEAR)
+            # 3 & 4. Only annotate, resize, and JPEG-encode when a browser is watching live stream
+            if has_viewers:
+                annotated = self._annotate_frame(raw_frame, statuses, person_boxes)
+                if w > 1280:
+                    scale = 1280.0 / w
+                    stream_preview = cv2.resize(annotated, (1280, int(h * scale)), interpolation=cv2.INTER_LINEAR)
+                else:
+                    stream_preview = annotated
+
+                ret, jpeg = cv2.imencode(".jpg", stream_preview, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                with self._lock:
+                    self.latest_clean_frame = raw_frame
+                    self.latest_annotated_frame = annotated
+                    if ret:
+                        self.latest_mjpeg_bytes = jpeg.tobytes()
+                stream_frame_count += 1
             else:
-                stream_preview = annotated
-
-            ret, jpeg = cv2.imencode(".jpg", stream_preview, [cv2.IMWRITE_JPEG_QUALITY, 75])
-
-            with self._lock:
-                self.latest_clean_frame = raw_frame
-                self.latest_annotated_frame = annotated
-                if ret:
-                    self.latest_mjpeg_bytes = jpeg.tobytes()
+                with self._lock:
+                    self.latest_clean_frame = raw_frame
 
             now = time.time()
             elapsed_inf = max(0.001, now - loop_start)
             self.actual_inference_fps = round(1.0 / elapsed_inf, 1)
 
-            stream_frame_count += 1
             if (now - fps_timer) >= 1.0:
                 self.actual_stream_fps = round(stream_frame_count / (now - fps_timer), 1)
                 stream_frame_count = 0
@@ -265,15 +294,16 @@ class CVEngine:
 
         if self.model is not None:
             try:
-                # Run YOLOv8 on imgsz=640 (fastest CPU mode, ~25-35ms)
-                results = self.model.predict(
-                    source=frame,
-                    imgsz=640,
-                    classes=[0], # Class 0 = person
-                    conf=self.settings.confidence_threshold,
-                    verbose=False,
-                    device="cpu"
-                )
+                # Run YOLOv8 with shared lock to prevent CPU thread thrashing
+                with self._model_lock:
+                    results = self.model.predict(
+                        source=frame,
+                        imgsz=480,
+                        classes=[0], # Class 0 = person
+                        conf=self.settings.confidence_threshold,
+                        verbose=False,
+                        device="cpu"
+                    )
                 for r in results:
                     boxes = r.boxes
                     for box in boxes:
@@ -408,21 +438,27 @@ class CVEngine:
     def generate_mjpeg_stream(self):
         """Yield MJPEG frames continuously at configured stream_fps without disconnecting."""
         target_delay = 1.0 / max(10.0, self.settings.stream_fps)
-        while self.running:
-            start_t = time.time()
-            jpeg_bytes = None
-            with self._lock:
-                jpeg_bytes = self.latest_mjpeg_bytes
+        with self._viewer_lock:
+            self.active_stream_viewers += 1
+        try:
+            while self.running:
+                start_t = time.time()
+                jpeg_bytes = None
+                with self._lock:
+                    jpeg_bytes = self.latest_mjpeg_bytes
 
-            if jpeg_bytes is not None:
-                yield (
-                    b"--frame\r\n"
-                    b"Content-Type: image/jpeg\r\n\r\n" + jpeg_bytes + b"\r\n"
-                )
+                if jpeg_bytes is not None:
+                    yield (
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n" + jpeg_bytes + b"\r\n"
+                    )
 
-            elapsed = time.time() - start_t
-            sleep_t = max(0.015, target_delay - elapsed)
-            time.sleep(sleep_t)
+                elapsed = time.time() - start_t
+                sleep_t = max(0.03, target_delay - elapsed)
+                time.sleep(sleep_t)
+        finally:
+            with self._viewer_lock:
+                self.active_stream_viewers = max(0, self.active_stream_viewers - 1)
 
     def get_live_state(self) -> Dict[str, Any]:
         with self._lock:
