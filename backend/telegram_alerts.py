@@ -141,7 +141,7 @@ class TelegramAlertManager:
                 ]]
             }
 
-        return self._post_telegram(message, reply_markup=reply_markup)
+        return self._send_alert_with_optional_photo(message, reply_markup=reply_markup)
 
     def send_no_menu_alert(self, table_name: str, elapsed_str: str, headcount: int = 1, table_id: str = "") -> bool:
         """Send alert when diners have been seated for N minutes without any waiter approaching."""
@@ -167,6 +167,17 @@ class TelegramAlertManager:
                 ]]
             }
 
+        return self._send_alert_with_optional_photo(message, reply_markup=reply_markup)
+
+    def _send_alert_with_optional_photo(self, message: str, reply_markup: Optional[Dict[str, Any]] = None) -> bool:
+        """Try attaching the annotated live camera snapshot so manager immediately sees who triggered the alert."""
+        if self._snapshot_fn:
+            try:
+                img = self._snapshot_fn()
+                if img and self.send_photo(img, caption=message, reply_markup=reply_markup):
+                    return True
+            except Exception as e:
+                print(f"[Telegram Snapshot Alert Fallback]: {e}")
         return self._post_telegram(message, reply_markup=reply_markup)
 
     def _post_telegram(self, text: str, chat_id_override: Optional[str] = None, reply_markup: Optional[Dict[str, Any]] = None) -> bool:
@@ -192,19 +203,33 @@ class TelegramAlertManager:
             print(f"[Telegram Alert Error] {e}")
             return False
 
-    def send_photo(self, photo_bytes: bytes, caption: str = "", chat_id_override: Optional[str] = None) -> bool:
+    def send_photo(
+        self,
+        photo_bytes: bytes,
+        caption: str = "",
+        chat_id_override: Optional[str] = None,
+        reply_markup: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         with self._lock:
             token = self.bot_token
             target_chat = chat_id_override or self.chat_id
         if not is_valid_bot_token(token) or not target_chat or not photo_bytes:
             return False
 
+        form_data: Dict[str, Any] = {
+            "chat_id": target_chat,
+            "caption": caption,
+            "parse_mode": "Markdown",
+        }
+        if reply_markup:
+            form_data["reply_markup"] = json.dumps(reply_markup)
+
         try:
             resp = requests.post(
                 f"https://api.telegram.org/bot{token}/sendPhoto",
-                data={"chat_id": target_chat, "caption": caption},
+                data=form_data,
                 files={"photo": ("snapshot.jpg", photo_bytes, "image/jpeg")},
-                timeout=10,
+                timeout=12,
             )
             return resp.status_code == 200
         except Exception as e:
@@ -258,17 +283,30 @@ class TelegramAlertManager:
                     timeout=4,
                 )
                 if ok and msg.get("message_id"):
-                    orig_text = msg.get("text", "")
-                    requests.post(
-                        f"https://api.telegram.org/bot{token}/editMessageText",
-                        json={
-                            "chat_id": chat_id,
-                            "message_id": msg["message_id"],
-                            "text": f"{orig_text}\n\n✅ *טופל ואושר מהנייד!*",
-                            "parse_mode": "Markdown",
-                        },
-                        timeout=4,
-                    )
+                    if "photo" in msg or "caption" in msg:
+                        orig_cap = msg.get("caption", "")
+                        requests.post(
+                            f"https://api.telegram.org/bot{token}/editMessageCaption",
+                            json={
+                                "chat_id": chat_id,
+                                "message_id": msg["message_id"],
+                                "caption": f"{orig_cap}\n\n✅ *טופל ואושר מהנייד!*",
+                                "parse_mode": "Markdown",
+                            },
+                            timeout=6,
+                        )
+                    else:
+                        orig_text = msg.get("text", "")
+                        requests.post(
+                            f"https://api.telegram.org/bot{token}/editMessageText",
+                            json={
+                                "chat_id": chat_id,
+                                "message_id": msg["message_id"],
+                                "text": f"{orig_text}\n\n✅ *טופל ואושר מהנייד!*",
+                                "parse_mode": "Markdown",
+                            },
+                            timeout=6,
+                        )
             return
 
         # 2. Handle Text Commands strictly from authorized chat_id

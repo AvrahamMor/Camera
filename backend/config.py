@@ -16,7 +16,7 @@ class SystemSettings(BaseModel):
     rtsp_transport: str = Field(default="tcp", description="'tcp' or 'udp'")
     video_file_path: str = Field(default="sample_videos/demo_restaurant.mp4")
     model_name: str = Field(default="yolov8n.pt", description="YOLO model path or weight name")
-    confidence_threshold: float = Field(default=0.35, ge=0.1, le=1.0)
+    confidence_threshold: float = Field(default=0.45, ge=0.1, le=1.0)
     target_fps: float = Field(default=5.0, ge=1.0, le=30.0, description="CV inference FPS throttle")
     stream_fps: float = Field(default=15.0, ge=5.0, le=30.0, description="MJPEG output streaming FPS")
     debounce_seconds: float = Field(default=4.0, ge=0.5, le=30.0, description="Debounce buffer time")

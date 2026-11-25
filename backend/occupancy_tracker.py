@@ -89,15 +89,15 @@ class TableState:
         event_data = None
 
         window_duration = (self.history[-1][0] - self.history[0][0]) if self.history else 0
-        is_window_full = window_duration >= (self.debounce_sec * 0.7)
+        is_window_full = window_duration >= (self.debounce_sec * 0.9)
 
         positive_frames = sum(1 for _, c in self.history if c > 0)
         zero_frames = sum(1 for _, c in self.history if c == 0)
         total_frames = len(self.history)
 
-        if total_frames > 0 and is_window_full:
-            majority_positive = (positive_frames / total_frames) >= 0.75
-            majority_zero = (zero_frames / total_frames) >= 0.75
+        if total_frames >= 3 and is_window_full:
+            majority_positive = (positive_frames / total_frames) >= 0.80 and positive_frames >= 3
+            majority_zero = (zero_frames / total_frames) >= 0.80
 
             # Transition: FREE -> OCCUPIED
             if self.status == "FREE" and majority_positive:
@@ -328,7 +328,8 @@ class OccupancyTracker:
         person_anchors = []
         for (x1, y1, x2, y2) in person_boxes:
             bx = ((x1 + x2) / 2.0) / max(1.0, float(frame_width))
-            by = float(y2) / max(1.0, float(frame_height))
+            # 88% down the box keeps anchor on the seated diner's lower body without overshooting into forward tables
+            by = (y1 + (y2 - y1) * 0.88) / max(1.0, float(frame_height))
             person_anchors.append((bx, by))
 
         table_statuses = []

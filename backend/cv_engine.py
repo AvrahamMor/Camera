@@ -49,6 +49,7 @@ class CVEngine:
         self.latest_table_statuses: List[Dict[str, Any]] = []
         self.latest_events: List[Dict[str, Any]] = []
         self.latest_person_boxes: List[Tuple[float, float, float, float]] = []
+        self.latest_person_confs: List[float] = []
 
         self.is_connected = False
         self.is_switching = False
@@ -234,9 +235,10 @@ class CVEngine:
 
             h, w = raw_frame.shape[:2]
 
-            # 1. Run YOLO inference on 640px image for ultra-fast CPU inference (<30ms)
-            person_boxes = self._run_detection_fast(raw_frame, sample_start_time)
+            # 1. Run YOLO inference on 640px image for sharp far-table detection
+            person_boxes, person_confs = self._run_detection_fast(raw_frame, sample_start_time)
             self.latest_person_boxes = person_boxes
+            self.latest_person_confs = person_confs
 
             # 2. Update occupancy state machine (filtered to active camera channel)
             statuses, events = self.tracker.update(person_boxes, w, h, active_channel=self.settings.ossia_channel)
@@ -293,16 +295,20 @@ class CVEngine:
             sleep_time = max(0.01, target_delay - elapsed_inf)
             time.sleep(sleep_time)
 
-    def _run_detection_fast(self, frame: np.ndarray, sample_start_time: float) -> List[Tuple[float, float, float, float]]:
+    def _run_detection_fast(self, frame: np.ndarray, sample_start_time: float) -> Tuple[List[Tuple[float, float, float, float]], List[float]]:
         person_boxes: List[Tuple[float, float, float, float]] = []
+        person_confs: List[float] = []
+        h_f, w_f = frame.shape[:2]
+        min_w = w_f * 0.02
+        min_h = h_f * 0.04
 
         if self.model is not None:
             try:
-                # Run YOLOv8 with shared lock to prevent CPU thread thrashing
+                # Run YOLOv8 at imgsz=640 with shared lock for crisp far-table accuracy
                 with self._model_lock:
                     results = self.model.predict(
                         source=frame,
-                        imgsz=480,
+                        imgsz=640,
                         classes=[0], # Class 0 = person
                         conf=self.settings.confidence_threshold,
                         verbose=False,
@@ -312,7 +318,13 @@ class CVEngine:
                     boxes = r.boxes
                     for box in boxes:
                         b = box.xyxy[0].cpu().numpy()
-                        person_boxes.append((float(b[0]), float(b[1]), float(b[2]), float(b[3])))
+                        conf_val = float(box.conf[0].cpu().numpy()) if box.conf is not None else 0.0
+                        x1, y1, x2, y2 = float(b[0]), float(b[1]), float(b[2]), float(b[3])
+                        # Reject tiny noise / chair artifacts
+                        if (x2 - x1) < min_w or (y2 - y1) < min_h:
+                            continue
+                        person_boxes.append((x1, y1, x2, y2))
+                        person_confs.append(conf_val)
             except Exception as e:
                 print(f"[CVEngine Detection Error]: {e}")
 
@@ -321,13 +333,18 @@ class CVEngine:
             t_sec = (time.time() - sample_start_time) % 30.0
             if 5.0 <= t_sec < 25.0:
                 person_boxes.append((575, 330, 615, 390))
+                person_confs.append(0.92)
                 person_boxes.append((665, 330, 705, 390))
+                person_confs.append(0.89)
             if t_sec >= 10.0:
                 person_boxes.append((170, 390, 210, 450))
+                person_confs.append(0.91)
                 person_boxes.append((270, 390, 310, 450))
+                person_confs.append(0.88)
                 person_boxes.append((220, 480, 260, 540))
+                person_confs.append(0.87)
 
-        return person_boxes
+        return person_boxes, person_confs
 
     def _annotate_frame(
         self,
@@ -404,13 +421,17 @@ class CVEngine:
             cv2.putText(frame, sub_text, (bx + 8, by + 34),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 200, 220), 1, cv2.LINE_AA)
 
-        # 3. Draw person feet/anchor indicators
-        for (x1, y1, x2, y2) in person_boxes:
+        # 3. Draw person boxes, confidence labels & 88% anchor indicators
+        confs = getattr(self, "latest_person_confs", [])
+        for idx, (x1, y1, x2, y2) in enumerate(person_boxes):
             cx = int((x1 + x2) / 2.0)
-            bottom_y = int(y2)
-            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (80, 140, 180), 1, cv2.LINE_AA)
-            cv2.circle(frame, (cx, bottom_y), 4, (0, 230, 255), -1, cv2.LINE_AA)
-            cv2.circle(frame, (cx, bottom_y), 8, (0, 230, 255), 1, cv2.LINE_AA)
+            anchor_y = int(y1 + (y2 - y1) * 0.88)
+            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 220, 255), 2, cv2.LINE_AA)
+            cv2.circle(frame, (cx, anchor_y), 5, (0, 230, 255), -1, cv2.LINE_AA)
+            cv2.circle(frame, (cx, anchor_y), 9, (0, 230, 255), 2, cv2.LINE_AA)
+            if idx < len(confs):
+                cv2.putText(frame, f"{confs[idx]:.2f}", (int(x1), max(14, int(y1) - 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 230, 255), 2, cv2.LINE_AA)
 
         # 4. Stream HUD Top Bar
         hud_bg = (14, 18, 24)
@@ -431,7 +452,17 @@ class CVEngine:
 
     def get_snapshot(self, clean: bool = True) -> Optional[bytes]:
         with self._lock:
-            frame = self.latest_clean_frame if clean else self.latest_annotated_frame
+            raw = self.latest_clean_frame.copy() if self.latest_clean_frame is not None else None
+            annotated = self.latest_annotated_frame if self.latest_annotated_frame is not None else None
+            statuses = list(self.latest_table_statuses)
+            boxes = list(self.latest_person_boxes)
+
+        if clean:
+            frame = raw
+        else:
+            # Always render fresh annotated frame on demand (even when web viewer is closed)
+            frame = self._annotate_frame(raw, statuses, boxes) if raw is not None else annotated
+
         if frame is None:
             frame = np.zeros((720, 1280, 3), dtype=np.uint8)
             cv2.putText(frame, "Waiting for Camera Stream...", (420, 360),
