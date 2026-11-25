@@ -64,14 +64,17 @@ class CVEngine:
         self._load_yolo()
 
     def _load_yolo(self):
-        model_name = self.settings.model_name or "yolov8n.pt"
+        model_name = self.settings.model_name or "yolov8n-pose.pt"
         print(f"[CVEngine] Loading YOLO model: {model_name}...")
         try:
-            self.model = YOLO(model_name)
+            new_model = YOLO(model_name)
+            with self._model_lock:
+                self.model = new_model
             print("[CVEngine] YOLO model loaded successfully.")
         except Exception as e:
             print(f"[CVEngine] Error loading model {model_name}: {e}. Retrying default yolov8n.pt...")
-            self.model = YOLO("yolov8n.pt")
+            with self._model_lock:
+                self.model = YOLO("yolov8n.pt")
 
     def update_settings(self, new_settings: SystemSettings):
         with self._lock:
@@ -215,93 +218,97 @@ class CVEngine:
         while self.running:
             target_delay = 1.0 / max(1.0, self.settings.target_fps)
             loop_start = time.time()
+            try:
+                raw_frame = None
+                with self._frame_lock:
+                    if self.latest_raw_frame is not None:
+                        raw_frame = self.latest_raw_frame.copy()
 
-            raw_frame = None
-            with self._frame_lock:
-                if self.latest_raw_frame is not None:
-                    raw_frame = self.latest_raw_frame.copy()
+                if raw_frame is None or self.is_switching:
+                    # Generate switching / waiting placeholder frame
+                    placeholder = np.zeros((720, 1280, 3), dtype=np.uint8)
+                    msg = f"Connecting to Camera {self.settings.ossia_channel}..." if self.is_switching else "Connecting to Camera Stream..."
+                    cv2.putText(placeholder, msg, (380, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (180, 220, 255), 2, cv2.LINE_AA)
+                    with self._lock:
+                        self.latest_annotated_frame = placeholder
+                        ret, jpeg = cv2.imencode(".jpg", placeholder, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                        if ret:
+                            self.latest_mjpeg_bytes = jpeg.tobytes()
+                    time.sleep(0.1)
+                    continue
 
-            if raw_frame is None or self.is_switching:
-                # Generate switching / waiting placeholder frame
-                placeholder = np.zeros((720, 1280, 3), dtype=np.uint8)
-                msg = f"Connecting to Camera {self.settings.ossia_channel}..." if self.is_switching else "Connecting to Camera Stream..."
-                cv2.putText(placeholder, msg, (380, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (180, 220, 255), 2, cv2.LINE_AA)
+                h, w = raw_frame.shape[:2]
+
+                # 1. Run YOLO / Pose inference on 640px image for pinpoint accuracy
+                detections = self._run_detection_fast(raw_frame, sample_start_time)
+                person_boxes = [d["box"] for d in detections]
+                self.latest_detections = detections
+                self.latest_person_boxes = person_boxes
+                self.latest_person_confs = [d["conf"] for d in detections]
+
+                # 2. Update occupancy state machine with dual-threshold hysteresis
+                statuses, events = self.tracker.update_detections(
+                    detections,
+                    w,
+                    h,
+                    active_channel=self.settings.ossia_channel,
+                    strict_conf=self.settings.confidence_threshold,
+                )
+
                 with self._lock:
-                    self.latest_annotated_frame = placeholder
-                    ret, jpeg = cv2.imencode(".jpg", placeholder, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                    if ret:
-                        self.latest_mjpeg_bytes = jpeg.tobytes()
-                time.sleep(0.1)
-                continue
+                    self.latest_table_statuses = statuses
+                    if events:
+                        self.latest_events.extend(events)
+                        if len(self.latest_events) > 50:
+                            self.latest_events = self.latest_events[-50:]
 
-            h, w = raw_frame.shape[:2]
+                with self._viewer_lock:
+                    has_viewers = self.active_stream_viewers > 0
 
-            # 1. Run YOLO / Pose inference on 640px image for pinpoint accuracy
-            detections = self._run_detection_fast(raw_frame, sample_start_time)
-            self.latest_detections = detections
-            self.latest_person_boxes = [d["box"] for d in detections]
-            self.latest_person_confs = [d["conf"] for d in detections]
+                # 3 & 4. Only annotate, resize, and JPEG-encode when a browser is watching live stream
+                if has_viewers:
+                    annotated = self._annotate_frame(raw_frame, statuses, person_boxes)
+                    if w > 1280:
+                        scale = 1280.0 / w
+                        stream_preview = cv2.resize(annotated, (1280, int(h * scale)), interpolation=cv2.INTER_LINEAR)
+                    else:
+                        stream_preview = annotated
 
-            # 2. Update occupancy state machine with dual-threshold hysteresis
-            statuses, events = self.tracker.update_detections(
-                detections,
-                w,
-                h,
-                active_channel=self.settings.ossia_channel,
-                strict_conf=self.settings.confidence_threshold,
-            )
-
-            with self._lock:
-                self.latest_table_statuses = statuses
-                if events:
-                    self.latest_events.extend(events)
-                    if len(self.latest_events) > 50:
-                        self.latest_events = self.latest_events[-50:]
-
-            with self._viewer_lock:
-                has_viewers = self.active_stream_viewers > 0
-
-            # 3 & 4. Only annotate, resize, and JPEG-encode when a browser is watching live stream
-            if has_viewers:
-                annotated = self._annotate_frame(raw_frame, statuses, person_boxes)
-                if w > 1280:
-                    scale = 1280.0 / w
-                    stream_preview = cv2.resize(annotated, (1280, int(h * scale)), interpolation=cv2.INTER_LINEAR)
+                    ret, jpeg = cv2.imencode(".jpg", stream_preview, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                    with self._lock:
+                        self.latest_clean_frame = raw_frame
+                        self.latest_annotated_frame = annotated
+                        if ret:
+                            self.latest_mjpeg_bytes = jpeg.tobytes()
+                    stream_frame_count += 1
                 else:
-                    stream_preview = annotated
+                    with self._lock:
+                        self.latest_clean_frame = raw_frame
 
-                ret, jpeg = cv2.imencode(".jpg", stream_preview, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                with self._lock:
-                    self.latest_clean_frame = raw_frame
-                    self.latest_annotated_frame = annotated
-                    if ret:
-                        self.latest_mjpeg_bytes = jpeg.tobytes()
-                stream_frame_count += 1
-            else:
-                with self._lock:
-                    self.latest_clean_frame = raw_frame
+                now = time.time()
+                elapsed_inf = max(0.001, now - loop_start)
+                self.actual_inference_fps = round(1.0 / elapsed_inf, 1)
 
-            now = time.time()
-            elapsed_inf = max(0.001, now - loop_start)
-            self.actual_inference_fps = round(1.0 / elapsed_inf, 1)
+                if (now - fps_timer) >= 1.0:
+                    self.actual_stream_fps = round(stream_frame_count / (now - fps_timer), 1)
+                    stream_frame_count = 0
+                    fps_timer = now
 
-            if (now - fps_timer) >= 1.0:
-                self.actual_stream_fps = round(stream_frame_count / (now - fps_timer), 1)
-                stream_frame_count = 0
-                fps_timer = now
+                # 5. Firebase periodic sync (every 5 seconds)
+                if (now - self.last_firebase_sync) >= 5.0:
+                    try:
+                        state = self.get_live_state()
+                        firebase_manager.sync_live_state(state)
+                        self.last_firebase_sync = now
+                    except Exception:
+                        pass
 
-            # 5. Firebase periodic sync (every 5 seconds)
-            if (now - self.last_firebase_sync) >= 5.0:
-                try:
-                    state = self.get_live_state()
-                    firebase_manager.sync_live_state(state)
-                    self.last_firebase_sync = now
-                except Exception:
-                    pass
-
-            # Throttle to configured target inference FPS
-            sleep_time = max(0.01, target_delay - elapsed_inf)
-            time.sleep(sleep_time)
+                # Throttle to configured target inference FPS
+                sleep_time = max(0.01, target_delay - elapsed_inf)
+                time.sleep(sleep_time)
+            except Exception as e:
+                print(f"[CVEngine Inference Worker Error]: {e}")
+                time.sleep(0.5)
 
     def _extract_pinpoint_anchor(
         self,
