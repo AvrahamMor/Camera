@@ -91,7 +91,7 @@ class TelegramAlertManager:
             resp = requests.get(
                 f"https://api.telegram.org/bot{token}/getUpdates",
                 params={"limit": 20, "timeout": 1},
-                timeout=6,
+                timeout=12,
             )
             data = resp.json()
             if not data.get("ok"):
@@ -160,7 +160,7 @@ class TelegramAlertManager:
             payload["reply_markup"] = reply_markup
 
         try:
-            resp = requests.post(url, json=payload, timeout=5)
+            resp = requests.post(url, json=payload, timeout=12)
             return resp.status_code == 200
         except Exception as e:
             print(f"[Telegram Alert Error] {e}")
