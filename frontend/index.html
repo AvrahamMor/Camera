@@ -711,7 +711,16 @@
 
             <div>
               <div class="flex justify-between mb-1">
-                <label class="text-slate-300">זמן התראה למלצר (ברירת מחדל)</label>
+                <label class="text-slate-300">התראת "ללא תפריט" (אי-גישת מלצר)</label>
+                <span id="lbl-menu-thresh" class="text-sky-400 font-mono">120 שנ' (2 דק')</span>
+              </div>
+              <input type="range" id="cfg-menu-thresh" min="30" max="300" step="15" value="120" class="w-full accent-sky-500">
+              <p class="text-[11px] text-slate-500 mt-1">שולח התראת תפריט לטלגרם אם לקוח יושב פרק זמן זה ואף מלצר לא ניגש אליו.</p>
+            </div>
+
+            <div>
+              <div class="flex justify-between mb-1">
+                <label class="text-slate-300">זמן התראה למלצר (שירות שוטף)</label>
                 <span id="lbl-alert-thresh" class="text-blue-400 font-mono">180 שניות (3 דקות)</span>
               </div>
               <input type="range" id="cfg-alert-thresh" min="30" max="600" step="15" value="180" class="w-full accent-blue-500">
@@ -841,9 +850,9 @@
   <div id="toast-container" class="fixed bottom-5 left-5 z-50 space-y-2 pointer-events-none"></div>
 
   <!-- JavaScript Modules -->
-  <script src="/static/js/calibration.js?v=4.1"></script>
-  <script src="/static/js/analytics.js?v=4.1"></script>
-  <script src="/static/js/app.js?v=4.1"></script>
+  <script src="/static/js/calibration.js?v=4.2"></script>
+  <script src="/static/js/analytics.js?v=4.2"></script>
+  <script src="/static/js/app.js?v=4.2"></script>
   <script>
     // Initialize Lucide Icons
     lucide.createIcons();

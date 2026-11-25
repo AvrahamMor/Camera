@@ -143,6 +143,32 @@ class TelegramAlertManager:
 
         return self._post_telegram(message, reply_markup=reply_markup)
 
+    def send_no_menu_alert(self, table_name: str, elapsed_str: str, headcount: int = 1, table_id: str = "") -> bool:
+        """Send alert when diners have been seated for N minutes without any waiter approaching."""
+        with self._lock:
+            enabled, token, chat_id = self.enabled, self.bot_token, self.chat_id
+        if not enabled or not token or not chat_id:
+            return False
+
+        diners_word = "בנאדם אחד" if headcount == 1 else f"{headcount} סועדים"
+        message = (
+            f"📋 *התראת תפריט — לקוח ממתין!*\n"
+            f"📍 *שולחן:* {table_name}\n"
+            f"👤 *יושב כרגע:* {diners_word}\n"
+            f"⏳ *ממתינים כבר:* `{elapsed_str}` דקות — *אף מלצר לא ניגש לתת תפריט!*\n\n"
+            f"⚡ _נא לגשת עם תפריט בהקדם!_"
+        )
+
+        reply_markup = None
+        if table_id:
+            reply_markup = {
+                "inline_keyboard": [[
+                    {"text": "✅ קיבלו תפריט / טופל", "callback_data": f"ack:{table_id}"}
+                ]]
+            }
+
+        return self._post_telegram(message, reply_markup=reply_markup)
+
     def _post_telegram(self, text: str, chat_id_override: Optional[str] = None, reply_markup: Optional[Dict[str, Any]] = None) -> bool:
         with self._lock:
             token = self.bot_token
@@ -279,7 +305,8 @@ class TelegramAlertManager:
                 lines.append("\n*שולחנות פעילים:*")
                 for t in occupied[:12]:
                     icon = "🟡" if t.get("status") == "NEEDS_SERVICE" else "🔴"
-                    lines.append(f"{icon} {t.get('name')} — {t.get('headcount')} סועדים ({t.get('elapsed_formatted')})")
+                    menu_txt = "✅ קיבל תפריט" if t.get("menu_served") else "📋 ממתין לתפריט"
+                    lines.append(f"{icon} {t.get('name')} — {t.get('headcount')} סועדים ({t.get('elapsed_formatted')}) • {menu_txt}")
             self._post_telegram("\n".join(lines), chat_id_override=chat_id)
         elif text in ("/photo", "תמונה"):
             if self._snapshot_fn:

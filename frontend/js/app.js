@@ -393,14 +393,21 @@ function renderLiveTables(tables) {
       cardBorder = 'border-amber-600/50 alert-pulse';
     }
 
+    const menuBadge = t.status === 'FREE'
+      ? ''
+      : (t.menu_served
+          ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px]">✓ קיבל תפריט</span>'
+          : '<span class="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px]">📋 ממתין לתפריט</span>');
+
     return `
       <div class="p-3 rounded-xl bg-surface-850 border ${cardBorder} flex items-center justify-between transition hover:border-slate-700">
         <div class="space-y-1">
-          <div class="flex items-center space-x-2 space-x-reverse">
+          <div class="flex items-center space-x-2 space-x-reverse flex-wrap gap-y-1">
             <span class="font-bold text-white text-xs">${t.name}</span>
             <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${statusClass}">
               ${statusText}
             </span>
+            ${menuBadge}
           </div>
           <div class="text-[11px] text-slate-400 flex items-center space-x-3 space-x-reverse">
             <span>סועדים: <b class="text-slate-200">${t.headcount}/${t.capacity}</b></span>
@@ -461,8 +468,9 @@ function initSettingsListeners() {
 
   // Sliders label updates
   bindSlider('cfg-target-fps', 'lbl-target-fps', val => `${parseFloat(val).toFixed(1)} FPS`);
-  bindSlider('cfg-debounce', 'lbl-debounce', val => `${parseFloat(val).toFixed(1)} sec`);
-  bindSlider('cfg-alert-thresh', 'lbl-alert-thresh', val => `${val} sec (${Math.round(val / 60)} min)`);
+  bindSlider('cfg-debounce', 'lbl-debounce', val => `${parseFloat(val).toFixed(1)} שניות`);
+  bindSlider('cfg-menu-thresh', 'lbl-menu-thresh', val => `${val} שנ' (${(val / 60).toFixed(1).replace('.0', '')} דק')`);
+  bindSlider('cfg-alert-thresh', 'lbl-alert-thresh', val => `${val} שנ' (${Math.round(val / 60)} דק')`);
   bindSlider('cfg-conf', 'lbl-conf', val => `${parseFloat(val).toFixed(2)}`);
 
   // Auto-generate RTSP URL when Ossia fields change
@@ -530,12 +538,14 @@ async function loadSystemSettings() {
     setVal('cfg-video-file-path', cfg.video_file_path);
     setVal('cfg-target-fps', cfg.target_fps);
     setVal('cfg-debounce', cfg.debounce_seconds);
+    setVal('cfg-menu-thresh', cfg.menu_alert_seconds || 120);
     setVal('cfg-alert-thresh', cfg.service_alert_threshold_seconds);
     setVal('cfg-conf', cfg.confidence_threshold);
 
     // Trigger slider labels
     document.getElementById('cfg-target-fps')?.dispatchEvent(new Event('input'));
     document.getElementById('cfg-debounce')?.dispatchEvent(new Event('input'));
+    document.getElementById('cfg-menu-thresh')?.dispatchEvent(new Event('input'));
     document.getElementById('cfg-alert-thresh')?.dispatchEvent(new Event('input'));
     document.getElementById('cfg-conf')?.dispatchEvent(new Event('input'));
 
@@ -652,6 +662,7 @@ async function saveSystemSettings() {
     video_file_path: document.getElementById('cfg-video-file-path').value.trim(),
     target_fps: parseFloat(document.getElementById('cfg-target-fps').value),
     debounce_seconds: parseFloat(document.getElementById('cfg-debounce').value),
+    menu_alert_seconds: parseInt(document.getElementById('cfg-menu-thresh')?.value || 120),
     service_alert_threshold_seconds: parseInt(document.getElementById('cfg-alert-thresh').value),
     confidence_threshold: parseFloat(document.getElementById('cfg-conf').value),
     ossia_ip: document.getElementById('cfg-ossia-ip').value.trim(),

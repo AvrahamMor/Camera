@@ -20,6 +20,7 @@ class SystemSettings(BaseModel):
     target_fps: float = Field(default=5.0, ge=1.0, le=30.0, description="CV inference FPS throttle")
     stream_fps: float = Field(default=15.0, ge=5.0, le=30.0, description="MJPEG output streaming FPS")
     debounce_seconds: float = Field(default=4.0, ge=0.5, le=30.0, description="Debounce buffer time")
+    menu_alert_seconds: int = Field(default=120, ge=15, le=600, description="Seconds after seating without waiter visit before no-menu alert")
     service_alert_threshold_seconds: int = Field(default=180, ge=10, description="Seconds before service alert")
     reconnect_interval_seconds: float = Field(default=5.0, ge=1.0)
     server_host: str = Field(default="0.0.0.0")

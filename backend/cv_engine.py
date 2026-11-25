@@ -25,7 +25,10 @@ from backend.firebase_sync import firebase_manager
 class CVEngine:
     def __init__(self):
         self.settings: SystemSettings = load_settings()
-        self.tracker = OccupancyTracker(debounce_sec=self.settings.debounce_seconds)
+        self.tracker = OccupancyTracker(
+            debounce_sec=self.settings.debounce_seconds,
+            menu_alert_sec=self.settings.menu_alert_seconds,
+        )
         self.model: Optional[YOLO] = None
 
         self._lock = threading.Lock()
@@ -75,6 +78,7 @@ class CVEngine:
             old_model = self.settings.model_name
             self.settings = new_settings
             self.tracker.set_debounce(new_settings.debounce_seconds)
+            self.tracker.set_menu_alert_seconds(new_settings.menu_alert_seconds)
 
         if old_model != new_settings.model_name:
             self._load_yolo()
