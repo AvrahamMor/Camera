@@ -67,8 +67,9 @@ class TableState:
         self.service_alert_fired: bool = False
         self.service_acknowledged: bool = False
 
-        # Waiter approach timers (filters quick walk-bys < 2.5s)
+        # Waiter approach timers (filters quick walk-bys / aisle glances)
         self.waiter_ring_start: Optional[float] = None
+        self.hand_reach_start: Optional[float] = None
         self.inner_spike_start: Optional[float] = None
 
         # Debounce buffer: list of (timestamp, raw_count)
@@ -80,6 +81,7 @@ class TableState:
         now: float,
         ring_count: int = 0,
         hold_count: Optional[int] = None,
+        hand_reach_count: int = 0,
     ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         """
         Feed new raw observation and update state machine with asymmetric hysteresis:
@@ -121,6 +123,7 @@ class TableState:
                 self.service_alert_fired = False
                 self.service_acknowledged = False
                 self.waiter_ring_start = None
+                self.hand_reach_start = None
                 self.inner_spike_start = None
 
                 record_seating(self.table.id, self.table.name, self.confirmed_headcount)
@@ -162,38 +165,54 @@ class TableState:
 
         # --- Waiter / Menu Approach Detection while occupied ---
         if self.status in ("OCCUPIED", "NEEDS_SERVICE"):
-            # Case 1: Person standing in the outer service ring around the table for >= 2.5s
+            required_dwell = 8.0 if self.status == "NEEDS_SERVICE" else 6.0
+            required_reach = 2.0 if self.status == "NEEDS_SERVICE" else 1.5
+            served_now = False
+
+            # Signal A: Waiter at table edge reaches wrist/hand onto table surface (placing menus)
+            if hand_reach_count >= 1:
+                if self.hand_reach_start is None:
+                    self.hand_reach_start = now
+                elif (now - self.hand_reach_start) >= required_reach:
+                    served_now = True
+            else:
+                self.hand_reach_start = None
+
+            # Signal B: Waiter stands stationary right beside table edge (tight 1.22x ring) for >= 6.0s
             if ring_count >= 1:
                 if self.waiter_ring_start is None:
                     self.waiter_ring_start = now
-                elif (now - self.waiter_ring_start) >= 2.5:
-                    self.last_waiter_visit_time = now
-                    if not self.menu_served:
-                        self.menu_served = True
-                        if self.status == "NEEDS_SERVICE":
-                            self.status = "OCCUPIED"
-                            self.service_acknowledged = True
-                        event_name = event_name or "MENU_SERVED"
-                        event_data = event_data or {
-                            "table_id": self.table.id,
-                            "table_name": self.table.name,
-                            "headcount": self.confirmed_headcount,
-                        }
+                elif (now - self.waiter_ring_start) >= required_dwell:
+                    served_now = True
             else:
                 self.waiter_ring_start = None
 
-            # Case 2: Extra person stepped inside polygon briefly (2.5s..15s) then left, OR stayed to join
+            if served_now:
+                self.last_waiter_visit_time = now
+                if not self.menu_served:
+                    self.menu_served = True
+                    if self.status == "NEEDS_SERVICE":
+                        self.status = "OCCUPIED"
+                        self.service_acknowledged = True
+                    event_name = event_name or "MENU_SERVED"
+                    event_data = event_data or {
+                        "table_id": self.table.id,
+                        "table_name": self.table.name,
+                        "headcount": self.confirmed_headcount,
+                    }
+
+            # Signal C: Extra person stepped inside polygon for 5s..20s then left
             if current_raw_count > self.confirmed_headcount:
                 if self.inner_spike_start is None:
                     self.inner_spike_start = now
-                elif (now - self.inner_spike_start) >= 15.0:
+                elif (now - self.inner_spike_start) >= 20.0:
                     # Extra guest sat down permanently -> update headcount
                     self.confirmed_headcount = current_raw_count
                     self.inner_spike_start = None
             else:
                 if self.inner_spike_start is not None:
                     spike_dur = now - self.inner_spike_start
-                    if 2.5 <= spike_dur < 15.0:
+                    if 5.0 <= spike_dur < 20.0:
                         self.last_waiter_visit_time = now
                         if not self.menu_served:
                             self.menu_served = True
@@ -417,7 +436,7 @@ class OccupancyTracker:
         self._sync_tables()
         now = time.time()
 
-        strict_anchors = []
+        strict_dets = []
         hold_anchors = []
         fw = max(1.0, float(frame_width))
         fh = max(1.0, float(frame_height))
@@ -427,7 +446,13 @@ class OccupancyTracker:
             norm_pt = (ax / fw, ay / fh)
             hold_anchors.append(norm_pt)
             if det.get("conf", 0.0) >= strict_conf:
-                strict_anchors.append(norm_pt)
+                kpts = det.get("keypoints") or {}
+                wrists_norm = [
+                    (kpts[wk][0] / fw, kpts[wk][1] / fh)
+                    for wk in ("l_wrist", "r_wrist")
+                    if wk in kpts
+                ]
+                strict_dets.append((norm_pt, wrists_norm))
 
         table_statuses = []
         emitted_events = []
@@ -440,23 +465,34 @@ class OccupancyTracker:
                 strict_count = state.raw_headcount
                 hold_count = state.raw_headcount
                 ring_count = state.raw_ring_count
+                hand_reach_count = 0
             else:
-                halo_poly = expand_polygon(poly_norm, scale=1.40)
+                # Tight 1.22x edge zone avoids clearing when waiters walk past in the main aisle
+                halo_poly = expand_polygon(poly_norm, scale=1.22)
                 hold_poly = expand_polygon(poly_norm, scale=1.10)
                 strict_count = 0
                 ring_count = 0
-                for anchor in strict_anchors:
+                hand_reach_count = 0
+                for anchor, wrists_norm in strict_dets:
                     if is_point_in_polygon(anchor, poly_norm):
                         strict_count += 1
                     elif is_point_in_polygon(anchor, halo_poly):
                         ring_count += 1
+                        if any(is_point_in_polygon(w_pt, poly_norm) for w_pt in wrists_norm):
+                            hand_reach_count += 1
 
                 hold_count = 0
                 for anchor in hold_anchors:
                     if is_point_in_polygon(anchor, hold_poly):
                         hold_count += 1
 
-            evt_name, evt_data = state.update_raw(strict_count, now, ring_count=ring_count, hold_count=hold_count)
+            evt_name, evt_data = state.update_raw(
+                strict_count,
+                now,
+                ring_count=ring_count,
+                hold_count=hold_count,
+                hand_reach_count=hand_reach_count,
+            )
             if evt_name and evt_data:
                 emitted_events.append({"event": evt_name, "data": evt_data})
 

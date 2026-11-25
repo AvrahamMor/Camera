@@ -332,6 +332,7 @@ class CVEngine:
 
             nose = _pt(0, 0.25)
             l_sh, r_sh = _pt(5, 0.25), _pt(6, 0.25)
+            l_wrist, r_wrist = _pt(9, 0.22), _pt(10, 0.22)
             l_hip, r_hip = _pt(11, 0.25), _pt(12, 0.25)
 
             if nose:
@@ -340,6 +341,10 @@ class CVEngine:
                 vis_pts["l_sh"] = l_sh
             if r_sh:
                 vis_pts["r_sh"] = r_sh
+            if l_wrist:
+                vis_pts["l_wrist"] = l_wrist
+            if r_wrist:
+                vis_pts["r_wrist"] = r_wrist
             if l_hip:
                 vis_pts["l_hip"] = l_hip
             if r_hip:
@@ -516,6 +521,9 @@ class CVEngine:
                     if "l_hip" in kpts and "r_hip" in kpts:
                         cv2.line(frame, (int(kpts["l_hip"][0]), int(kpts["l_hip"][1])),
                                  (int(kpts["r_hip"][0]), int(kpts["r_hip"][1])), (0, 230, 255), 2, cv2.LINE_AA)
+                    for wk in ("l_wrist", "r_wrist"):
+                        if wk in kpts:
+                            cv2.circle(frame, (int(kpts[wk][0]), int(kpts[wk][1])), 4, (80, 255, 140), -1, cv2.LINE_AA)
                 else:
                     cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 220, 255), 1, cv2.LINE_AA)
 
