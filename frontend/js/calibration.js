@@ -27,10 +27,15 @@ function initCalibrationTool() {
     onCanvasRightClick(e);
   });
 
-  // Restore saved camera
-  const savedCam = localStorage.getItem('visiondine_active_calib_cam');
+  // Restore saved camera (fallback to ch 2 if saved channel 1/7 was removed)
+  const activeChannels = [2, 3, 4, 5, 6, 8];
+  let savedCam = localStorage.getItem('visiondine_active_calib_cam');
+  if (!savedCam || !activeChannels.includes(parseInt(savedCam))) {
+    savedCam = '2';
+    localStorage.setItem('visiondine_active_calib_cam', savedCam);
+  }
   const calibSel = document.getElementById('calib-camera-select');
-  if (savedCam && calibSel) {
+  if (calibSel) {
     calibSel.value = savedCam;
   }
 
@@ -74,10 +79,10 @@ async function loadCalibrationTables() {
       redrawCalibrationCanvas();
       
       const calibSel = document.getElementById('calib-camera-select');
-      const currentCam = parseInt(calibSel ? calibSel.value : 1) || 1;
+      const currentCam = parseInt(calibSel ? calibSel.value : 2) || 2;
       if (calTables.length > 0 && !calSelectedTableId) {
         // Only select a table belonging to current camera so camera doesn't jump
-        const tableOnCam = calTables.find(t => (t.camera_channel || 1) === currentCam);
+        const tableOnCam = calTables.find(t => (t.camera_channel || 2) === currentCam);
         if (tableOnCam) {
           selectCalibrationTable(tableOnCam.id, false);
         }
@@ -93,7 +98,7 @@ async function calibrationGrabSnapshot(channel = null) {
   if (loading) loading.classList.remove('hidden');
 
   const calibSel = document.getElementById('calib-camera-select');
-  const ch = parseInt(channel || (calibSel ? calibSel.value : 1)) || 1;
+  const ch = parseInt(channel || (calibSel ? calibSel.value : 2)) || 2;
 
   try {
     const res = await fetch(`/api/snapshot?channel=${ch}&clean=true&t=` + Date.now());
@@ -121,7 +126,7 @@ async function calibrationGrabSnapshot(channel = null) {
 }
 
 function onCalibrationCameraChange(newChannel) {
-  const ch = parseInt(newChannel) || 1;
+  const ch = parseInt(newChannel) || 2;
   localStorage.setItem('visiondine_active_calib_cam', ch);
 
   const camInput = document.getElementById('editor-table-camera');
@@ -499,7 +504,7 @@ async function calibrationSaveCurrentTable() {
 
   const calibSel = document.getElementById('calib-camera-select');
   const camInput = document.getElementById('editor-table-camera');
-  const cameraChannel = calIsDrawingNew ? (parseInt(calibSel?.value) || 1) : (parseInt(camInput?.value) || parseInt(calibSel?.value) || 1);
+  const cameraChannel = calIsDrawingNew ? (parseInt(calibSel?.value) || 2) : (parseInt(camInput?.value) || parseInt(calibSel?.value) || 2);
 
   // If editing an existing table and changed its ID, pass old_id so backend deletes the previous ID and replaces it!
   const oldId = (calSelectedTableId && calSelectedTableId !== '__new__') ? calSelectedTableId : null;

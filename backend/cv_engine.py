@@ -15,7 +15,7 @@ cv2.setNumThreads(2)
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;3000000"
 
 from ultralytics import YOLO
-from backend.config import load_settings, save_settings, SystemSettings, BASE_DIR
+from backend.config import load_settings, save_settings, SystemSettings, BASE_DIR, ACTIVE_CAMERA_CHANNELS
 from backend.tables_manager import tables_manager
 from backend.occupancy_tracker import OccupancyTracker
 from backend.database import get_kpis, get_recent_events
@@ -25,6 +25,8 @@ from backend.firebase_sync import firebase_manager
 class CVEngine:
     def __init__(self):
         self.settings: SystemSettings = load_settings()
+        if self.settings.ossia_channel not in ACTIVE_CAMERA_CHANNELS:
+            self.settings.ossia_channel = ACTIVE_CAMERA_CHANNELS[0]
         self.tracker = OccupancyTracker(
             debounce_sec=self.settings.debounce_seconds,
             menu_alert_sec=self.settings.menu_alert_seconds,

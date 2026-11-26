@@ -26,7 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(refreshKPIs, 3000);
 });
 
-// --- 3x3 Matrix Grid vs Single Focus Mode Switcher ---
+// --- 3x2 Matrix Grid vs Single Focus Mode Switcher ---
 function switchStreamViewMode(mode) {
   currentStreamMode = mode;
   const btnMatrix = document.getElementById('btn-view-matrix');
@@ -42,8 +42,8 @@ function switchStreamViewMode(mode) {
     if (btnSingle) btnSingle.className = 'px-3 py-1 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 space-x-reverse text-slate-400 hover:text-white';
     if (pills) pills.classList.remove('hidden');
     if (selContainer) selContainer.classList.add('hidden');
-    if (title) title.innerText = 'שידור חי • רשת 9 מצלמות (1-9)';
-    if (resBadge) resBadge.innerText = 'מטריצה 3x3';
+    if (title) title.innerText = 'שידור חי • רשת 6 מצלמות (2-6, 8)';
+    if (resBadge) resBadge.innerText = 'מטריצה 3x2';
     if (img) img.src = '/api/video_feed?mode=matrix&t=' + Date.now();
   } else {
     if (btnSingle) btnSingle.className = 'px-3 py-1 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 space-x-reverse bg-blue-600 text-white shadow-sm';
@@ -52,7 +52,7 @@ function switchStreamViewMode(mode) {
     if (selContainer) selContainer.classList.remove('hidden');
 
     const sel = document.getElementById('camera-select');
-    const ch = sel ? sel.value : 1;
+    const ch = sel ? sel.value : 2;
     if (title) title.innerText = `שידור חי • מצלמה ${ch}`;
     if (resBadge) resBadge.innerText = `מיקוד מצלמה ${ch}`;
     if (img) img.src = `/api/video_feed?mode=single&t=${Date.now()}`;
@@ -65,7 +65,7 @@ function zoomToCamera(channel) {
 }
 
 function onVideoPlayerClick(e) {
-  // If in matrix mode, clicking any quadrant zooms into that camera!
+  // If in matrix mode, clicking any tile zooms into that camera ([2,3,4] / [5,6,8])
   if (currentStreamMode !== 'matrix') return;
   const img = document.getElementById('live-video-stream');
   if (!img) return;
@@ -74,15 +74,16 @@ function onVideoPlayerClick(e) {
   const clickX = e.clientX - rect.left;
   const clickY = e.clientY - rect.top;
 
-  const relX = clickX / rect.width;
-  const relY = clickY / rect.height;
+  const relX = Math.min(0.999, Math.max(0, clickX / rect.width));
+  const relY = Math.min(0.999, Math.max(0, clickY / rect.height));
 
-  // 3x3 Grid
+  // 3x2 Grid for active restaurant cameras (excluding unused channels 1 and 7)
+  const matrixChannels = [2, 3, 4, 5, 6, 8];
   const col = Math.min(2, Math.floor(relX * 3));
-  const row = Math.min(2, Math.floor(relY * 3));
-  const channel = row * 3 + col + 1;
+  const row = Math.min(1, Math.floor(relY * 2));
+  const channel = matrixChannels[row * 3 + col];
 
-  if (channel >= 1 && channel <= 8) {
+  if (channel) {
     showToast(`מתמקד במצלמה ${channel}...`, 'info');
     zoomToCamera(channel);
   }
@@ -97,7 +98,7 @@ async function loadCameraChannels() {
       const sel = document.getElementById('camera-select');
       if (sel && data.channels) {
         sel.innerHTML = data.channels.map(c =>
-          `<option value="${c.channel}" ${c.channel === data.current_channel ? 'selected' : ''}>${c.name}${c.channel === 1 ? ' (ראשי)' : ''}</option>`
+          `<option value="${c.channel}" ${c.channel === data.current_channel ? 'selected' : ''}>${c.name}</option>`
         ).join('');
       }
       const title = document.getElementById('stream-header-title');
@@ -571,7 +572,7 @@ async function loadSystemSettings() {
     // Populate Ossia fields if available
     setVal('cfg-ossia-ip', cfg.ossia_ip || '192.168.1.100');
     setVal('cfg-ossia-port', cfg.ossia_port || 554);
-    setVal('cfg-ossia-ch', cfg.ossia_channel || 1);
+    setVal('cfg-ossia-ch', cfg.ossia_channel || 2);
     setVal('cfg-ossia-user', cfg.ossia_user || 'admin');
     setVal('cfg-ossia-pass', cfg.ossia_pass || '');
     setVal('cfg-ossia-stream', cfg.ossia_stream !== undefined ? cfg.ossia_stream : 1);

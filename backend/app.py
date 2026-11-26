@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse, FileResponse, JSONResponse, Red
 from fastapi.staticfiles import StaticFiles
 import cv2
 
-from backend.config import load_settings, save_settings, SystemSettings, BASE_DIR
+from backend.config import load_settings, save_settings, SystemSettings, BASE_DIR, ACTIVE_CAMERA_CHANNELS
 from backend.tables_manager import tables_manager, TableModel
 from backend.cv_engine import cv_engine
 from backend.multi_camera_engine import multi_camera_engine
@@ -290,24 +290,27 @@ def auth_change_password(payload: Dict[str, Any], request: Request, response: Re
 
 @app.get("/api/camera/channels")
 def get_camera_channels():
-    """Return available restaurant NVR channels (strictly channels 1 to 8)."""
-    current_ch = cv_engine.settings.ossia_channel or 1
-    channels = []
-    for ch in range(1, 9):
-        channels.append({
+    """Return active restaurant NVR channels (2, 3, 4, 5, 6, 8 — excluding 1 and 7)."""
+    current_ch = cv_engine.settings.ossia_channel
+    if current_ch not in ACTIVE_CAMERA_CHANNELS:
+        current_ch = ACTIVE_CAMERA_CHANNELS[0]
+    channels = [
+        {
             "channel": ch,
             "name": f"מצלמה {ch}",
-            "is_current": (ch == current_ch)
-        })
+            "is_current": (ch == current_ch),
+        }
+        for ch in ACTIVE_CAMERA_CHANNELS
+    ]
     return {"current_channel": current_ch, "channels": channels}
 
 
 @app.post("/api/camera/switch")
 def switch_camera_channel(payload: Dict[str, Any]):
-    """Switch active camera channel on the fly seamlessly (1-8)."""
-    new_ch = int(payload.get("channel", 1))
-    if not (1 <= new_ch <= 8):
-        raise HTTPException(status_code=400, detail="Channel must be between 1 and 8 for the restaurant")
+    """Switch active camera channel on the fly across active restaurant cameras."""
+    new_ch = int(payload.get("channel", ACTIVE_CAMERA_CHANNELS[0]))
+    if new_ch not in ACTIVE_CAMERA_CHANNELS:
+        raise HTTPException(status_code=400, detail=f"Channel must be one of {ACTIVE_CAMERA_CHANNELS}")
 
     cv_engine.switch_channel(new_ch)
     multi_camera_engine.switch_focus_channel(new_ch)
@@ -316,7 +319,7 @@ def switch_camera_channel(payload: Dict[str, Any]):
 
 @app.get("/api/video_feed")
 def video_feed(mode: str = "matrix"):
-    """MJPEG stream: 'matrix' for multi-camera grid (cams 1-8), or 'single' for focused single camera."""
+    """MJPEG stream: 'matrix' for 6-camera grid (2,3,4,5,6,8), or 'single' for focused camera."""
     if mode == "matrix":
         return StreamingResponse(
             multi_camera_engine.generate_matrix_stream(),
@@ -330,7 +333,7 @@ def video_feed(mode: str = "matrix"):
 
 @app.get("/api/video_feed/matrix")
 def video_feed_matrix():
-    """Dedicated multi-camera matrix MJPEG stream (cams 1-8)."""
+    """Dedicated 6-camera matrix MJPEG stream (2,3,4,5,6,8)."""
     return StreamingResponse(
         multi_camera_engine.generate_matrix_stream(),
         media_type="multipart/x-mixed-replace; boundary=frame"
@@ -340,7 +343,7 @@ def video_feed_matrix():
 @app.get("/api/snapshot")
 def get_snapshot(channel: int = 0, clean: bool = True):
     """Grab a high-resolution snapshot for the interactive ROI calibration tool."""
-    if 1 <= channel <= 8:
+    if channel in ACTIVE_CAMERA_CHANNELS:
         frame = multi_camera_engine.get_snapshot_frame(channel)
         if frame is not None:
             ret, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])

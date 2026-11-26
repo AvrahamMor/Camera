@@ -9,10 +9,11 @@ CONFIG_DIR = BASE_DIR / "config"
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 TABLES_FILE = CONFIG_DIR / "tables_config.json"
 DATABASE_FILE = BASE_DIR / "restaurant_analytics.db"
+ACTIVE_CAMERA_CHANNELS = [2, 3, 4, 5, 6, 8]
 
 class SystemSettings(BaseModel):
     video_source: str = Field(default="sample", description="'sample', 'rtsp', or 'file'")
-    rtsp_url: str = Field(default="rtsp://admin:123456@192.168.1.100:554/unicast/c1/s0/live")
+    rtsp_url: str = Field(default="rtsp://admin:123456@192.168.1.100:554/unicast/c2/s0/live")
     rtsp_transport: str = Field(default="tcp", description="'tcp' or 'udp'")
     video_file_path: str = Field(default="sample_videos/demo_restaurant.mp4")
     model_name: str = Field(default="yolov8n-pose.pt", description="YOLO model path or weight name")
@@ -32,7 +33,7 @@ class SystemSettings(BaseModel):
     ossia_port: Optional[int] = 554
     ossia_user: Optional[str] = "admin"
     ossia_pass: Optional[str] = "123456"
-    ossia_channel: Optional[int] = 1
+    ossia_channel: Optional[int] = 2
     ossia_stream: Optional[int] = 0
 
 def load_settings() -> SystemSettings:

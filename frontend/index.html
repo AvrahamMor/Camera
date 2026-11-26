@@ -202,13 +202,13 @@
               
               <div class="flex items-center space-x-3 space-x-reverse">
                 <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-                <span class="text-xs font-bold text-slate-200" id="stream-header-title">שידור חי • רשת 8 מצלמות (1-8)</span>
+                <span class="text-xs font-bold text-slate-200" id="stream-header-title">שידור חי • רשת 6 מצלמות (2-6, 8)</span>
 
                 <!-- View Mode Toggle: Matrix vs Single Focus -->
                 <div class="flex items-center space-x-1 space-x-reverse bg-surface-950 p-1 rounded-xl border border-slate-700/80">
                   <button id="btn-view-matrix" onclick="switchStreamViewMode('matrix')" class="px-3 py-1 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 space-x-reverse bg-blue-600 text-white shadow-sm">
                     <i data-lucide="grid" class="w-3.5 h-3.5"></i>
-                    <span>רשת 8 מצלמות</span>
+                    <span>רשת 6 מצלמות</span>
                   </button>
                   <button id="btn-view-single" onclick="switchStreamViewMode('single')" class="px-3 py-1 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 space-x-reverse text-slate-400 hover:text-white">
                     <i data-lucide="maximize-2" class="w-3.5 h-3.5"></i>
@@ -221,34 +221,30 @@
                   <i data-lucide="video" class="w-3.5 h-3.5 text-blue-400"></i>
                   <label for="camera-select" class="text-xs text-slate-400 font-medium">עבור למצלמה:</label>
                   <select id="camera-select" onchange="quickSwitchCamera(this.value)" class="bg-transparent text-white font-bold text-xs focus:outline-none cursor-pointer">
-                    <!-- Populated dynamically via JS: 1 to 8 only -->
-                    <option value="1">מצלמה 1</option>
+                    <!-- Populated dynamically via JS: active dining cameras -->
                     <option value="2">מצלמה 2</option>
                     <option value="3">מצלמה 3</option>
                     <option value="4">מצלמה 4</option>
                     <option value="5">מצלמה 5</option>
                     <option value="6">מצלמה 6</option>
-                    <option value="7">מצלמה 7</option>
                     <option value="8">מצלמה 8</option>
                   </select>
                 </div>
 
-                <!-- 1..8 Quick Jump Buttons (shown in Matrix Mode) -->
+                <!-- Quick Jump Buttons (shown in Matrix Mode) -->
                 <div id="matrix-quick-pills" class="flex items-center space-x-1 space-x-reverse">
                   <span class="text-[11px] text-slate-400 font-medium ml-1">מיקוד:</span>
-                  <button onclick="zoomToCamera(1)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">1</button>
                   <button onclick="zoomToCamera(2)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">2</button>
                   <button onclick="zoomToCamera(3)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">3</button>
                   <button onclick="zoomToCamera(4)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">4</button>
                   <button onclick="zoomToCamera(5)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">5</button>
                   <button onclick="zoomToCamera(6)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">6</button>
-                  <button onclick="zoomToCamera(7)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">7</button>
                   <button onclick="zoomToCamera(8)" class="w-6 h-6 rounded bg-slate-800 hover:bg-blue-600 text-[11px] text-white font-bold transition">8</button>
                 </div>
               </div>
 
               <div class="flex items-center space-x-3 space-x-reverse text-xs">
-                <span class="text-slate-400 font-mono" id="stream-resolution-badge">מטריצה 3x3</span>
+                <span class="text-slate-400 font-mono" id="stream-resolution-badge">מטריצה 3x2</span>
                 <button onclick="toggleVideoFullscreen()" class="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition" title="מסך מלא">
                   <i data-lucide="maximize" class="w-4 h-4"></i>
                 </button>
@@ -363,13 +359,11 @@
               <i data-lucide="video" class="w-4 h-4 text-blue-400"></i>
               <label for="calib-camera-select" class="text-xs font-bold text-slate-300">בחר מצלמה:</label>
               <select id="calib-camera-select" onchange="onCalibrationCameraChange(this.value)" class="bg-transparent text-blue-400 font-bold text-xs focus:outline-none cursor-pointer">
-                <option value="1">מצלמה 1</option>
                 <option value="2">מצלמה 2</option>
                 <option value="3">מצלמה 3</option>
                 <option value="4">מצלמה 4</option>
                 <option value="5">מצלמה 5</option>
                 <option value="6">מצלמה 6</option>
-                <option value="7">מצלמה 7</option>
                 <option value="8">מצלמה 8</option>
               </select>
             </div>
@@ -437,13 +431,11 @@
                 <div>
                   <label class="block text-slate-400 mb-1">משויך למצלמה</label>
                   <select id="editor-table-camera" class="w-full bg-surface-900 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500 text-xs">
-                    <option value="1">מצלמה 1</option>
                     <option value="2">מצלמה 2</option>
                     <option value="3">מצלמה 3</option>
                     <option value="4">מצלמה 4</option>
                     <option value="5">מצלמה 5</option>
                     <option value="6">מצלמה 6</option>
-                    <option value="7">מצלמה 7</option>
                     <option value="8">מצלמה 8</option>
                   </select>
                 </div>

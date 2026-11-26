@@ -7,7 +7,7 @@ import numpy as np
 
 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;2000000"
 
-from backend.config import load_settings, save_settings, SystemSettings
+from backend.config import load_settings, save_settings, SystemSettings, ACTIVE_CAMERA_CHANNELS
 from backend.tables_manager import tables_manager
 
 
@@ -97,13 +97,13 @@ class CameraGrabber:
 
 class MultiCameraEngine:
     """
-    Orchestrates the 3x3 restaurant matrix (Channels 1-8 + status tile) AND
-    lightweight round-robin Multi-Cam AI monitoring across all calibrated table cameras.
+    Orchestrates the 6-camera restaurant matrix (Channels 2, 3, 4, 5, 6, 8 in a 3x2 grid) AND
+    lightweight round-robin Multi-Cam AI monitoring across all calibrated dining cameras.
     """
 
     def __init__(self):
         self.settings: SystemSettings = load_settings()
-        self.channels = list(range(1, 9))
+        self.channels = list(ACTIVE_CAMERA_CHANNELS)
         self.grabbers: Dict[int, CameraGrabber] = {}
 
         self.running = False
@@ -113,9 +113,11 @@ class MultiCameraEngine:
         self.latest_matrix_frame: Optional[np.ndarray] = None
         self.latest_matrix_jpeg: Optional[bytes] = None
 
-        self.focused_channel = self.settings.ossia_channel or 1
-        if self.focused_channel not in self.channels:
-            self.focused_channel = 1
+        self.focused_channel = (
+            self.settings.ossia_channel
+            if self.settings.ossia_channel in self.channels
+            else self.channels[0]
+        )
 
         self.lock = threading.Lock()
         self._viewer_lock = threading.Lock()
@@ -176,13 +178,13 @@ class MultiCameraEngine:
                 self.start()
 
     def get_ai_channels(self) -> List[int]:
-        """Return only camera channels that actually have calibrated tables (avoids wasting bandwidth)."""
+        """Return only active dining camera channels that have calibrated tables."""
         if not self.settings.multi_cam_ai:
             return []
         chs = sorted({
-            int(getattr(t, "camera_channel", 1))
+            int(getattr(t, "camera_channel", self.channels[0]))
             for t in tables_manager.get_all()
-            if 1 <= int(getattr(t, "camera_channel", 1)) <= 8
+            if int(getattr(t, "camera_channel", self.channels[0])) in self.channels
         })
         return chs
 
@@ -267,7 +269,7 @@ class MultiCameraEngine:
             print(f"[MultiCamEngine] Switched focus to Channel {channel}")
 
     def _matrix_composer_loop(self):
-        """Stitches channels 1-8 into a 3x3 grid at ~8 FPS ONLY when a viewer is connected."""
+        """Stitches active dining channels [2,3,4,5,6,8] into a crisp 3x2 grid at ~8 FPS when a viewer is connected."""
         tile_w, tile_h = 426, 240
         blank_tile = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
 
@@ -332,28 +334,18 @@ class MultiCameraEngine:
 
                 tiles[ch] = tile
 
-            # Tile 9: Information & Status Card
-            tile9 = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
-            cv2.rectangle(tile9, (0, 0), (tile_w - 1, tile_h - 1), (35, 45, 60), 1)
-            cv2.rectangle(tile9, (10, 10), (tile_w - 10, 38), (22, 30, 42), -1)
-            cv2.putText(tile9, "BASHERT - RESTAURANT AI", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (100, 200, 255), 1, cv2.LINE_AA)
-            cv2.putText(tile9, f"AI Monitoring: {len(ai_channels)} Cams Active", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (220, 230, 245), 1, cv2.LINE_AA)
-            cv2.putText(tile9, "YOLOv8n-Pose + Menu Alerts: ON", (20, 102), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (80, 225, 120), 1, cv2.LINE_AA)
-            cv2.putText(tile9, "Google Cloud + Telegram: Live", (20, 134), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 185, 70), 1, cv2.LINE_AA)
-            cv2.putText(tile9, f"Clock: {time.strftime('%H:%M:%S')}", (20, 168), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (190, 205, 225), 1, cv2.LINE_AA)
-            cv2.putText(tile9, "Click any camera to zoom in", (20, 205), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (130, 145, 165), 1, cv2.LINE_AA)
+            row1 = np.hstack([tiles[self.channels[0]], tiles[self.channels[1]], tiles[self.channels[2]]])
+            row2 = np.hstack([tiles[self.channels[3]], tiles[self.channels[4]], tiles[self.channels[5]]])
 
-            row1 = np.hstack([tiles[1], tiles[2], tiles[3]])
-            row2 = np.hstack([tiles[4], tiles[5], tiles[6]])
-            row3 = np.hstack([tiles[7], tiles[8], tile9])
-            matrix_frame = np.vstack([row1, row2, row3])
-
-            cv2.rectangle(matrix_frame, (0, 0), (matrix_frame.shape[1], 28), (12, 16, 22), -1)
-            cv2.line(matrix_frame, (0, 28), (matrix_frame.shape[1], 28), (40, 50, 65), 1)
-            cv2.putText(matrix_frame, "VISIONDINE AI • LIVE RESTAURANT 8-CAMERA MATRIX (CHANNELS 1-8) • OSSIA VMS",
+            header_bar = np.zeros((28, row1.shape[1], 3), dtype=np.uint8)
+            header_bar[:] = (12, 16, 22)
+            cv2.line(header_bar, (0, 27), (row1.shape[1], 27), (40, 50, 65), 1)
+            cv2.putText(header_bar, "VISIONDINE AI • LIVE 6-CAMERA MATRIX (CAMS 2,3,4,5,6,8) • OSSIA VMS",
                         (18, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (200, 220, 245), 1, cv2.LINE_AA)
-            cv2.putText(matrix_frame, f"Multi-Cam AI: {len(ai_channels)} Cams | Focus: CAM {self.focused_channel}",
-                        (matrix_frame.shape[1] - 360, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (120, 220, 150), 1, cv2.LINE_AA)
+            cv2.putText(header_bar, f"Multi-Cam AI: {len(ai_channels)} Cams | {time.strftime('%H:%M:%S')} | Focus: CAM {self.focused_channel}",
+                        (row1.shape[1] - 430, 19), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (120, 220, 150), 1, cv2.LINE_AA)
+
+            matrix_frame = np.vstack([header_bar, row1, row2])
 
             ret, jpeg = cv2.imencode(".jpg", matrix_frame, [cv2.IMWRITE_JPEG_QUALITY, 72])
             with self.lock:
