@@ -55,10 +55,17 @@ def expand_polygon(polygon: List[List[float]], scale: float = 1.40) -> List[List
 
 
 class TableState:
-    def __init__(self, table: TableModel, debounce_sec: float = 4.0, menu_alert_sec: int = 120):
+    def __init__(
+        self,
+        table: TableModel,
+        debounce_sec: float = 4.0,
+        menu_alert_sec: int = 120,
+        checkin_alert_sec: int = 600,
+    ):
         self.table = table
         self.debounce_sec = debounce_sec
         self.menu_alert_sec = menu_alert_sec
+        self.checkin_alert_sec = checkin_alert_sec
 
         self.status = "FREE"  # FREE, OCCUPIED, NEEDS_SERVICE
         self.raw_headcount = 0
@@ -73,6 +80,9 @@ class TableState:
         self.no_menu_alert_fired: bool = False
         self.service_alert_fired: bool = False
         self.service_acknowledged: bool = False
+        self.checkin_alert_fired: bool = False
+        self.checkin_acknowledged: bool = False
+        self.active_alert_type: Optional[str] = None  # "NO_WAITER" or "CHECKIN_10M"
         self.ever_occupied: bool = False
 
         # Waiter approach & tabletop item timers (filters quick walk-bys / aisle glances)
@@ -81,8 +91,27 @@ class TableState:
         self.inner_spike_start: Optional[float] = None
         self.tabletop_items_start: Optional[float] = None
 
-        # Debounce buffer: list of (timestamp, raw_count)
+        # Debounce & group headcount history buffers: list of (timestamp, count)
         self.history: List[Tuple[float, int]] = []
+        self.headcount_history: List[Tuple[float, int]] = []
+
+    def _reset_session_flags(self, now: float) -> None:
+        self.seated_time = None
+        self.last_state_change = now
+        self.last_seated_seen_time = None
+        self.last_waiter_visit_time = None
+        self.menu_served = False
+        self.no_menu_alert_fired = False
+        self.service_alert_fired = False
+        self.service_acknowledged = False
+        self.checkin_alert_fired = False
+        self.checkin_acknowledged = False
+        self.active_alert_type = None
+        self.waiter_ring_start = None
+        self.hand_reach_start = None
+        self.inner_spike_start = None
+        self.tabletop_items_start = None
+        self.headcount_history = []
 
     def update_raw(
         self,
@@ -96,9 +125,10 @@ class TableState:
         """
         Feed new raw observation and update state machine with asymmetric hysteresis:
         - Seating (FREE -> OCCUPIED) uses strict high-confidence detections + debounce_sec (~4s).
-        - Keeping/Vacating uses sticky hold_count (lower conf >= 0.20) + >=20s continuous empty table.
+        - Keeping/Vacating and group headcount use sticky hold_count (lower conf >= 0.20 inside table).
         """
         effective_hold = current_raw_count if hold_count is None else max(current_raw_count, hold_count)
+        inside_count = min(max(1, self.table.capacity), effective_hold) if effective_hold > 0 else 0
         self.raw_headcount = effective_hold if self.status in ("OCCUPIED", "NEEDS_SERVICE") else current_raw_count
         self.raw_ring_count = ring_count
 
@@ -106,6 +136,9 @@ class TableState:
         # Retain up to 12 samples across max(2.5*debounce, 10s) so slower Multi-Cam polls (~1.5-2.5s) never evict frame 1 before frame 3
         retention = max(self.debounce_sec * 2.5, 10.0)
         self.history = [(t, c) for t, c in self.history if t >= (now - retention)][-12:]
+
+        self.headcount_history.append((now, inside_count))
+        self.headcount_history = [(t, c) for t, c in self.headcount_history if t >= (now - 16.0)][-24:]
 
         event_name = None
         event_data = None
@@ -121,12 +154,15 @@ class TableState:
         if total_frames >= 3 and is_window_full:
             majority_positive = (positive_frames / total_frames) >= 0.80 and positive_frames >= 3
 
-            # Transition: FREE -> OCCUPIED (strict high-confidence trigger)
+            # Transition: FREE -> OCCUPIED (use hold-inclusive inside_count so couples/groups count accurately on seat)
             if self.status == "FREE" and majority_positive:
-                recent_counts = [c for _, c in self.history if c > 0]
-                median_count = int(np.median(recent_counts)) if recent_counts else 1
+                pos_inside = [c for t, c in self.headcount_history if t >= (now - retention) and c > 0]
+                if not pos_inside:
+                    pos_inside = [c for _, c in self.history if c > 0]
+                initial_count = int(np.percentile(pos_inside, 75) + 0.5) if pos_inside else 1
+
                 self.status = "OCCUPIED"
-                self.confirmed_headcount = max(1, median_count)
+                self.confirmed_headcount = max(1, min(self.table.capacity, initial_count))
                 self.seated_time = now
                 self.last_state_change = now
                 self.last_seated_seen_time = now
@@ -135,6 +171,9 @@ class TableState:
                 self.no_menu_alert_fired = False
                 self.service_alert_fired = False
                 self.service_acknowledged = False
+                self.checkin_alert_fired = False
+                self.checkin_acknowledged = False
+                self.active_alert_type = None
                 self.ever_occupied = True
                 self.waiter_ring_start = None
                 self.hand_reach_start = None
@@ -149,28 +188,31 @@ class TableState:
                     "headcount": self.confirmed_headcount
                 }
 
-        # Sticky occupied hold + 20-second asymmetric vacate timer
+        # Sticky occupied hold, group headcount refinement, and 20-second asymmetric vacate timer
         if self.status in ("OCCUPIED", "NEEDS_SERVICE"):
             if effective_hold > 0:
                 self.last_seated_seen_time = now
+                # Update group size continuously using rolling 8s observations (resistant to 1 dropped frame)
+                hc_recent = [(t, c) for t, c in self.headcount_history if t >= (now - 8.0) and c > 0]
+                if len(hc_recent) >= 3 and (hc_recent[-1][0] - hc_recent[0][0]) >= 5.0:
+                    counts_only = [c for _, c in hc_recent]
+                    higher = [c for c in counts_only if c > self.confirmed_headcount]
+                    lower = [c for c in counts_only if c < self.confirmed_headcount]
+                    if len(higher) / len(counts_only) >= 0.55:
+                        self.confirmed_headcount = min(self.table.capacity, int(np.median(higher) + 0.5))
+                    elif (
+                        len(self.headcount_history) >= 5
+                        and (self.headcount_history[-1][0] - self.headcount_history[0][0]) >= 14.0
+                        and len(lower) / len(counts_only) >= 0.80
+                    ):
+                        self.confirmed_headcount = max(1, int(round(np.median(counts_only))))
             else:
                 vacate_sec = max(20.0, self.debounce_sec * 4.0)
                 if self.last_seated_seen_time is not None and (now - self.last_seated_seen_time) >= vacate_sec:
                     duration_sec = int(now - (self.seated_time or now))
                     self.status = "FREE"
                     self.confirmed_headcount = 0
-                    self.seated_time = None
-                    self.last_state_change = now
-                    self.last_seated_seen_time = None
-                    self.last_waiter_visit_time = None
-                    self.menu_served = False
-                    self.no_menu_alert_fired = False
-                    self.service_alert_fired = False
-                    self.service_acknowledged = False
-                    self.waiter_ring_start = None
-                    self.hand_reach_start = None
-                    self.inner_spike_start = None
-                    self.tabletop_items_start = None
+                    self._reset_session_flags(now)
 
                     record_vacated(self.table.id)
                     event_name = "VACATED"
@@ -180,7 +222,7 @@ class TableState:
                         "duration_sec": duration_sec
                     }
 
-        # --- Waiter / Menu Approach Detection while occupied ---
+        # --- Waiter Approach Detection while occupied ---
         if self.status in ("OCCUPIED", "NEEDS_SERVICE"):
             required_dwell = 4.0
             required_reach = 1.5
@@ -204,7 +246,7 @@ class TableState:
             else:
                 self.waiter_ring_start = None
 
-            # Signal D: Persistent plates, food, drinks, or open menus detected on unoccluded tabletop center
+            # Signal D: Persistent plates, food, or items detected on unoccluded tabletop center
             if tabletop_items and not self.menu_served:
                 if self.tabletop_items_start is None:
                     self.tabletop_items_start = now
@@ -218,24 +260,20 @@ class TableState:
                 event_name = event_name or evt_name
                 event_data = event_data or evt_data
 
-            # Signal C: Extra person stepped inside polygon for 4s..20s then left
+            # Signal C: Waiter stepped directly inside table polygon for 4s..16s then walked away
             if current_raw_count > self.confirmed_headcount:
                 if self.inner_spike_start is None:
                     self.inner_spike_start = now
-                elif (now - self.inner_spike_start) >= 20.0:
-                    # Extra guest sat down permanently -> update headcount
-                    self.confirmed_headcount = current_raw_count
-                    self.inner_spike_start = None
             else:
                 if self.inner_spike_start is not None:
                     spike_dur = now - self.inner_spike_start
-                    if 4.0 <= spike_dur < 20.0:
+                    if 4.0 <= spike_dur < 16.0:
                         evt_name, evt_data = self._mark_waiter_arrived(now)
                         event_name = event_name or evt_name
                         event_data = event_data or evt_data
                     self.inner_spike_start = None
 
-        # --- Check 2-Minute No-Menu Alert (Unattended Seating) ---
+        # --- Stage 1: Check 2-Minute Initial Waiter Alert (No Waiter Approached Yet) ---
         if (
             self.status in ("OCCUPIED", "NEEDS_SERVICE")
             and self.seated_time
@@ -248,23 +286,21 @@ class TableState:
                 self.status = "NEEDS_SERVICE"
                 self.no_menu_alert_fired = True
                 self.service_alert_fired = True
+                self.active_alert_type = "NO_WAITER"
                 record_service_alert(self.table.id)
 
-                elapsed_min = int(elapsed // 60)
-                elapsed_sec = int(elapsed % 60)
-                elapsed_display = f"{elapsed_min}:{elapsed_sec:02d}"
-
+                elapsed_display = f"{int(elapsed // 60)}:{int(elapsed % 60):02d}"
                 telegram_alerts.send_no_menu_alert(
                     self.table.name,
                     elapsed_display,
                     self.confirmed_headcount,
                     table_id=self.table.id,
-                    channel=getattr(self.table, "camera_channel", 1),
+                    channel=getattr(self.table, "camera_channel", 2),
                 )
                 firebase_manager.log_event({
                     "table_id": self.table.id,
                     "table_name": self.table.name,
-                    "event_type": "NO_MENU_ALERT",
+                    "event_type": "NO_WAITER_ALERT",
                     "elapsed_sec": int(elapsed),
                     "headcount": self.confirmed_headcount
                 })
@@ -273,45 +309,48 @@ class TableState:
                     "table_id": self.table.id,
                     "table_name": self.table.name,
                     "elapsed_sec": int(elapsed),
-                    "reason": "no_menu",
+                    "reason": "no_waiter",
                 }
 
-        # --- Ongoing General Service Alert (counts from last waiter visit or seating) ---
-        elif self.status in ("OCCUPIED", "NEEDS_SERVICE") and self.seated_time:
-            ref_time = self.last_waiter_visit_time or self.seated_time
-            elapsed_since_visit = now - ref_time
-            if (
-                elapsed_since_visit >= self.table.service_threshold_sec
-                and not self.service_alert_fired
-                and not self.service_acknowledged
-            ):
+        # --- Stage 2: 10-Minute Check-In Alert ("Send waiter to verify everything is okay") ---
+        elif (
+            self.status in ("OCCUPIED", "NEEDS_SERVICE")
+            and self.seated_time
+            and self.menu_served
+            and not self.checkin_alert_fired
+            and not self.checkin_acknowledged
+        ):
+            elapsed_seated = now - self.seated_time
+            since_visit = now - (self.last_waiter_visit_time or self.seated_time)
+            if elapsed_seated >= self.checkin_alert_sec and since_visit >= 45.0:
                 self.status = "NEEDS_SERVICE"
+                self.checkin_alert_fired = True
                 self.service_alert_fired = True
+                self.active_alert_type = "CHECKIN_10M"
                 record_service_alert(self.table.id)
-                event_name = "SERVICE_ALERT"
-                event_data = {
-                    "table_id": self.table.id,
-                    "table_name": self.table.name,
-                    "elapsed_sec": int(elapsed_since_visit)
-                }
 
-                elapsed_min = int(elapsed_since_visit // 60)
-                elapsed_sec = int(elapsed_since_visit % 60)
-                elapsed_display = f"{elapsed_min}:{elapsed_sec:02d}"
+                elapsed_display = f"{int(elapsed_seated // 60)}:{int(elapsed_seated % 60):02d}"
                 telegram_alerts.send_alert(
                     self.table.name,
                     elapsed_display,
                     self.confirmed_headcount,
                     table_id=self.table.id,
-                    channel=getattr(self.table, "camera_channel", 1),
+                    channel=getattr(self.table, "camera_channel", 2),
                 )
                 firebase_manager.log_event({
                     "table_id": self.table.id,
                     "table_name": self.table.name,
-                    "event_type": "SERVICE_ALERT",
-                    "elapsed_sec": int(elapsed_since_visit),
+                    "event_type": "CHECKIN_10M_ALERT",
+                    "elapsed_sec": int(elapsed_seated),
                     "headcount": self.confirmed_headcount
                 })
+                event_name = "SERVICE_ALERT"
+                event_data = {
+                    "table_id": self.table.id,
+                    "table_name": self.table.name,
+                    "elapsed_sec": int(elapsed_seated),
+                    "reason": "checkin_10m",
+                }
 
         return event_name, event_data
 
@@ -321,9 +360,12 @@ class TableState:
         return 0
 
     def acknowledge_service(self):
+        if self.checkin_alert_fired or self.active_alert_type == "CHECKIN_10M":
+            self.checkin_acknowledged = True
         self.service_acknowledged = True
         self.menu_served = True
         self.service_alert_fired = False
+        self.active_alert_type = None
         self.last_waiter_visit_time = time.time()
         if self.status == "NEEDS_SERVICE":
             self.status = "OCCUPIED"
@@ -333,15 +375,20 @@ class TableState:
         """Record a confirmed waiter arrival and emit follow-up updates if an alert was active."""
         self.last_waiter_visit_time = now
         was_alerting = self.status == "NEEDS_SERVICE" or self.service_alert_fired
-        first_menu = not self.menu_served
-        if not first_menu and not was_alerting:
+        alert_kind = self.active_alert_type or "NO_WAITER"
+        first_service = not self.menu_served
+        if not first_service and not was_alerting:
             return None, None
 
         self.menu_served = True
         if was_alerting:
             self.status = "OCCUPIED"
             self.service_alert_fired = False
-            self.service_acknowledged = True
+            if alert_kind == "CHECKIN_10M":
+                self.checkin_acknowledged = True
+            else:
+                self.service_acknowledged = True
+            self.active_alert_type = None
             acknowledge_service(self.table.id)
 
             elapsed = (now - self.seated_time) if self.seated_time else 0
@@ -350,11 +397,13 @@ class TableState:
                 self.table.name,
                 elapsed_display,
                 table_id=self.table.id,
+                alert_kind=alert_kind,
             )
             firebase_manager.log_event({
                 "table_id": self.table.id,
                 "table_name": self.table.name,
                 "event_type": "WAITER_ARRIVED",
+                "alert_kind": alert_kind,
                 "elapsed_sec": int(elapsed),
                 "headcount": self.confirmed_headcount,
             })
@@ -364,6 +413,7 @@ class TableState:
             "table_name": self.table.name,
             "headcount": self.confirmed_headcount,
             "after_alert": was_alerting,
+            "alert_kind": alert_kind if was_alerting else None,
         }
 
 
@@ -372,11 +422,13 @@ class OccupancyTracker:
         self,
         debounce_sec: float = 4.0,
         menu_alert_sec: int = 120,
+        checkin_alert_sec: int = 600,
         cache_path: Optional[Path] = DEFAULT_CACHE_PATH,
         detector: Optional[TabletopDetector] = None,
     ):
         self.debounce_sec = debounce_sec
         self.menu_alert_sec = menu_alert_sec
+        self.checkin_alert_sec = checkin_alert_sec
         self.cache_path = Path(cache_path) if cache_path else None
         self.tabletop_detector = detector if detector is not None else tabletop_detector
         self._lock = threading.RLock()
@@ -409,6 +461,9 @@ class OccupancyTracker:
                 st.no_menu_alert_fired = bool(info.get("no_menu_alert_fired", False))
                 st.service_alert_fired = bool(info.get("service_alert_fired", False))
                 st.service_acknowledged = bool(info.get("service_acknowledged", False))
+                st.checkin_alert_fired = bool(info.get("checkin_alert_fired", False))
+                st.checkin_acknowledged = bool(info.get("checkin_acknowledged", False))
+                st.active_alert_type = info.get("active_alert_type")
                 st.ever_occupied = True
                 restored += 1
             if restored:
@@ -437,6 +492,9 @@ class OccupancyTracker:
                         "no_menu_alert_fired": st.no_menu_alert_fired,
                         "service_alert_fired": st.service_alert_fired,
                         "service_acknowledged": st.service_acknowledged,
+                        "checkin_alert_fired": st.checkin_alert_fired,
+                        "checkin_acknowledged": st.checkin_acknowledged,
+                        "active_alert_type": st.active_alert_type,
                     }
             payload = {"saved_at": cur, "tables": active}
             tmp_path = self.cache_path.with_name(self.cache_path.name + ".tmp")
@@ -458,13 +516,19 @@ class OccupancyTracker:
             for s in self.states.values():
                 s.menu_alert_sec = menu_alert_sec
 
+    def set_checkin_alert_seconds(self, checkin_alert_sec: int):
+        with self._lock:
+            self.checkin_alert_sec = checkin_alert_sec
+            for s in self.states.values():
+                s.checkin_alert_sec = checkin_alert_sec
+
     def _sync_tables(self):
         all_tables = tables_manager.get_all()
         current_ids = set()
         for t in all_tables:
             current_ids.add(t.id)
             if t.id not in self.states:
-                self.states[t.id] = TableState(t, self.debounce_sec, self.menu_alert_sec)
+                self.states[t.id] = TableState(t, self.debounce_sec, self.menu_alert_sec, self.checkin_alert_sec)
             else:
                 self.states[t.id].table = t
 
@@ -474,7 +538,7 @@ class OccupancyTracker:
 
     def _serialize_state(self, state: TableState, now: float, frame_width: int = 1280, frame_height: int = 720) -> Dict[str, Any]:
         poly_norm = state.table.polygon
-        t_channel = getattr(state.table, 'camera_channel', 1)
+        t_channel = getattr(state.table, 'camera_channel', 2)
         elapsed = state.get_elapsed_seconds(now)
         elapsed_str = f"{elapsed // 60:02d}:{elapsed % 60:02d}"
         poly_px = [[int(pt[0] * frame_width), int(pt[1] * frame_height)] for pt in poly_norm]
@@ -485,8 +549,10 @@ class OccupancyTracker:
             "capacity": state.table.capacity,
             "service_threshold_sec": state.table.service_threshold_sec,
             "menu_alert_seconds": state.menu_alert_sec,
+            "checkin_alert_seconds": state.checkin_alert_sec,
             "status": state.status,
             "menu_served": state.menu_served,
+            "alert_type": state.active_alert_type,
             "raw_count": state.raw_headcount,
             "headcount": state.confirmed_headcount,
             "elapsed_seconds": elapsed,
@@ -583,7 +649,7 @@ class OccupancyTracker:
                 if active_channel is None or t_channel == active_channel:
                     # 1.45x halo catches waiters standing beside the table in the aisle (including backs turned)
                     halo_poly = expand_polygon(poly_norm, scale=1.45)
-                    hold_poly = expand_polygon(poly_norm, scale=1.10)
+                    hold_poly = expand_polygon(poly_norm, scale=1.08)
                     other_polys = [
                         st.table.polygon
                         for tid, st in self.states.items()
@@ -605,7 +671,14 @@ class OccupancyTracker:
                             if any(is_point_in_polygon(w_pt, poly_norm) for w_pt in wrists_norm):
                                 hand_reach_count += 1
 
-                    hold_count = sum(1 for anchor in hold_anchors if is_point_in_polygon(anchor, hold_poly))
+                    hold_count = sum(
+                        1 for anchor in hold_anchors
+                        if is_point_in_polygon(anchor, poly_norm)
+                        or (
+                            is_point_in_polygon(anchor, hold_poly)
+                            and not any(is_point_in_polygon(anchor, op) for op in other_polys)
+                        )
+                    )
 
                     evt_name, evt_data = state.update_raw(
                         strict_count,

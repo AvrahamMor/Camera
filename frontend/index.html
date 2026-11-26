@@ -703,20 +703,20 @@
 
             <div>
               <div class="flex justify-between mb-1">
-                <label class="text-slate-300">התראת "ללא תפריט" (אי-גישת מלצר)</label>
+                <label class="text-slate-300">התראת אי-גישת מלצר (פתיחה)</label>
                 <span id="lbl-menu-thresh" class="text-sky-400 font-mono">120 שנ' (2 דק')</span>
               </div>
               <input type="range" id="cfg-menu-thresh" min="30" max="300" step="15" value="120" class="w-full accent-sky-500">
-              <p class="text-[11px] text-slate-500 mt-1">שולח התראת תפריט לטלגרם אם לקוח יושב פרק זמן זה ואף מלצר לא ניגש אליו.</p>
+              <p class="text-[11px] text-slate-500 mt-1">שולח התראה לטלגרם אם לקוחות יושבים פרק זמן זה ואף מלצר עדיין לא ניגש אליהם.</p>
             </div>
 
             <div>
               <div class="flex justify-between mb-1">
-                <label class="text-slate-300">זמן התראה למלצר (שירות שוטף)</label>
-                <span id="lbl-alert-thresh" class="text-blue-400 font-mono">180 שניות (3 דקות)</span>
+                <label class="text-slate-300">בדיקת שביעות רצון (לברר שהכל בסדר)</label>
+                <span id="lbl-alert-thresh" class="text-blue-400 font-mono">600 שנ' (10 דק')</span>
               </div>
-              <input type="range" id="cfg-alert-thresh" min="30" max="600" step="15" value="180" class="w-full accent-blue-500">
-              <p class="text-[11px] text-slate-500 mt-1">מפעיל התראה למלצר כאשר שולחן יושב מעל זמן זה ללא שירות.</p>
+              <input type="range" id="cfg-alert-thresh" min="180" max="1800" step="60" value="600" class="w-full accent-blue-500">
+              <p class="text-[11px] text-slate-500 mt-1">לאחר שהשולחן יושב מעל זמן זה (ברירת מחדל 10 דקות), נשלחת תזכורת לשלוח מלצר לבדוק שהכל בסדר.</p>
             </div>
 
             <div>

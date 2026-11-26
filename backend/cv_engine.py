@@ -30,6 +30,7 @@ class CVEngine:
         self.tracker = OccupancyTracker(
             debounce_sec=self.settings.debounce_seconds,
             menu_alert_sec=self.settings.menu_alert_seconds,
+            checkin_alert_sec=self.settings.checkin_alert_seconds,
         )
         self.model: Optional[YOLO] = None
 
@@ -86,6 +87,7 @@ class CVEngine:
             self.settings = new_settings
             self.tracker.set_debounce(new_settings.debounce_seconds)
             self.tracker.set_menu_alert_seconds(new_settings.menu_alert_seconds)
+            self.tracker.set_checkin_alert_seconds(new_settings.checkin_alert_seconds)
 
         if old_model != new_settings.model_name:
             self._load_yolo()

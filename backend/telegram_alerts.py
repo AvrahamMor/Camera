@@ -119,26 +119,35 @@ class TelegramAlertManager:
         except Exception as e:
             return {"found": False, "detail": f"שגיאת חיבור לטלגרם: {e}"}
 
-    def send_alert(self, table_name: str, elapsed_str: str, headcount: int = 1, table_id: str = "") -> bool:
-        """Send urgent service alert with inline Acknowledge button."""
+    @staticmethod
+    def _format_diners(headcount: int) -> str:
+        if headcount <= 1:
+            return "בנאדם אחד"
+        if headcount == 2:
+            return "זוג (2 סועדים)"
+        return f"{headcount} סועדים"
+
+    def send_alert(self, table_name: str, elapsed_str: str, headcount: int = 1, table_id: str = "", channel: Optional[int] = None) -> bool:
+        """Send 10-minute comfort check-in alert reminding staff to verify everything is okay."""
         with self._lock:
             enabled, token, chat_id = self.enabled, self.bot_token, self.chat_id
         if not enabled or not token or not chat_id:
             return False
 
+        diners_word = self._format_diners(headcount)
         message = (
-            f"🔔 *התראת שירות דחופה!*\n"
+            f"🍽️ *בדיקת שולחן — יושבים מעל 10 דקות!*\n"
             f"📍 *שולחן:* {table_name}\n"
-            f"👥 *סועדים:* {headcount}\n"
-            f"⏳ *ממתינים למלצר כבר:* `{elapsed_str}` דקות\n\n"
-            f"⚡ _נא לגשת בהקדם!_"
+            f"👥 *סועדים:* {diners_word}\n"
+            f"⏱️ *יושבים כבר:* `{elapsed_str}` דקות\n\n"
+            f"💬 _שלח מלצר לבדוק שהכל בסדר בשולחן ואם הם צריכים משהו נוסף!_"
         )
 
         reply_markup = None
         if table_id:
             reply_markup = {
                 "inline_keyboard": [[
-                    {"text": "✅ טופל / קיבל שירות", "callback_data": f"ack:{table_id}"}
+                    {"text": "✅ מלצר בדק שהכל בסדר", "callback_data": f"ack:{table_id}"}
                 ]]
             }
 
@@ -151,26 +160,32 @@ class TelegramAlertManager:
         if not enabled or not token or not chat_id:
             return False
 
-        diners_word = "בנאדם אחד" if headcount == 1 else f"{headcount} סועדים"
+        diners_word = self._format_diners(headcount)
         message = (
-            f"📋 *התראת תפריט — לקוח ממתין!*\n"
+            f"🚨 *התראת שירות — אף מלצר לא ניגש!*\n"
             f"📍 *שולחן:* {table_name}\n"
-            f"👤 *יושב כרגע:* {diners_word}\n"
-            f"⏳ *ממתינים כבר:* `{elapsed_str}` דקות — *אף מלצר לא ניגש לתת תפריט!*\n\n"
-            f"⚡ _נא לגשת עם תפריט בהקדם!_"
+            f"👥 *יושבים כרגע:* {diners_word}\n"
+            f"⏳ *יושבים כבר:* `{elapsed_str}` דקות — *אף מלצר לא ניגש לשולחן!*\n\n"
+            f"⚡ _נא לשלוח מלצר לשולחן בהקדם!_"
         )
 
         reply_markup = None
         if table_id:
             reply_markup = {
                 "inline_keyboard": [[
-                    {"text": "✅ קיבלו תפריט / טופל", "callback_data": f"ack:{table_id}"}
+                    {"text": "✅ מלצר ניגש / טופל", "callback_data": f"ack:{table_id}"}
                 ]]
             }
 
         return self._send_alert_with_optional_photo(message, reply_markup=reply_markup, channel=channel, table_id=table_id)
 
-    def send_waiter_arrived_update(self, table_name: str, elapsed_str: str, table_id: str = "") -> bool:
+    def send_waiter_arrived_update(
+        self,
+        table_name: str,
+        elapsed_str: str,
+        table_id: str = "",
+        alert_kind: str = "NO_WAITER",
+    ) -> bool:
         """Notify Telegram as a direct reply when a waiter arrives at a table that had an active alert."""
         with self._lock:
             enabled, token, chat_id = self.enabled, self.bot_token, self.chat_id
@@ -178,11 +193,18 @@ class TelegramAlertManager:
         if not enabled or not token or not chat_id:
             return False
 
+        if alert_kind == "CHECKIN_10M":
+            header = "✅ *עדכון — מלצר ניגש לבדוק שהכל בסדר!*"
+            note = "✨ _המערכת זיהתה שמלצר ניגש לשולחן לוודא שהכל טוב._"
+        else:
+            header = "✅ *עדכון שירות — מלצר ניגש לשולחן!*"
+            note = "✨ _המערכת זיהתה שמלצר הגיע לטפל בשולחן._"
+
         message = (
-            f"✅ *עדכון שירות — מלצר ניגש לשולחן!*\n"
+            f"{header}\n"
             f"📍 *שולחן:* {table_name}\n"
             f"⏱️ *לאחר:* `{elapsed_str}` דקות\n"
-            f"✨ _המערכת זיהתה שמלצר הגיע לטפל בשולחן._"
+            f"{note}"
         )
         return self._post_telegram(message, reply_to_message_id=reply_msg_id)
 
@@ -395,7 +417,7 @@ class TelegramAlertManager:
                 lines.append("\n*שולחנות פעילים:*")
                 for t in occupied[:12]:
                     icon = "🟡" if t.get("status") == "NEEDS_SERVICE" else "🔴"
-                    menu_txt = "✅ קיבל תפריט" if t.get("menu_served") else "📋 ממתין לתפריט"
+                    menu_txt = "✅ טופל ע\"י מלצר" if t.get("menu_served") else "⏳ ממתין למלצר"
                     lines.append(f"{icon} {t.get('name')} — {t.get('headcount')} סועדים ({t.get('elapsed_formatted')}) • {menu_txt}")
             self._post_telegram("\n".join(lines), chat_id_override=chat_id)
         elif text in ("/photo", "תמונה"):

@@ -350,21 +350,28 @@ function renderLiveAlerts(alerts) {
     return;
   }
 
-  container.innerHTML = alerts.map(a => `
+  container.innerHTML = alerts.map(a => {
+    const isCheckin = a.alert_type === 'CHECKIN_10M';
+    const subLabel = isCheckin
+      ? `לבדוק שהכל בסדר (10+ דק׳): <span class="font-mono text-amber-400 font-bold">${a.elapsed_formatted}</span>`
+      : `אף מלצר לא ניגש: <span class="font-mono text-amber-400 font-bold">${a.elapsed_formatted}</span>`;
+    const btnText = isCheckin ? 'בדקו שהכל בסדר' : 'מלצר ניגש';
+    return `
     <div class="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between text-xs transition">
       <div class="flex items-center space-x-2.5 space-x-reverse">
         <span class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span>
         <div>
-          <div class="font-bold text-amber-300">${a.name}</div>
-          <div class="text-[11px] text-slate-400">ממתין למלצר: <span class="font-mono text-amber-400 font-bold">${a.elapsed_formatted}</span></div>
+          <div class="font-bold text-amber-300">${a.name} • ${a.headcount} סועדים</div>
+          <div class="text-[11px] text-slate-400">${subLabel}</div>
         </div>
       </div>
       <button onclick="acknowledgeService('${a.id}')"
               class="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-500/40 text-[11px] font-semibold transition">
-        אישור שירות
+        ${btnText}
       </button>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 function renderLiveTables(tables) {
@@ -401,15 +408,15 @@ function renderLiveTables(tables) {
       cardBorder = 'border-rose-900/40';
     } else if (t.status === 'NEEDS_SERVICE') {
       statusClass = 'status-pill-alert';
-      statusText = 'דרוש שירות!';
+      statusText = t.alert_type === 'CHECKIN_10M' ? 'בדיקת 10 דק׳!' : 'דרוש מלצר!';
       cardBorder = 'border-amber-600/50 alert-pulse';
     }
 
     const menuBadge = t.status === 'FREE'
       ? ''
       : (t.menu_served
-          ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px]">✓ קיבל תפריט</span>'
-          : '<span class="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px]">📋 ממתין לתפריט</span>');
+          ? '<span class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px]">✓ בטיפול</span>'
+          : '<span class="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px]">⏳ ממתין למלצר</span>');
 
     return `
       <div class="p-3 rounded-xl bg-surface-850 border ${cardBorder} flex items-center justify-between transition hover:border-slate-700">
@@ -430,13 +437,13 @@ function renderLiveTables(tables) {
         <div class="flex items-center space-x-2 space-x-reverse">
           ${t.status === 'NEEDS_SERVICE' ? `
             <button onclick="acknowledgeService('${t.id}')"
-                    class="p-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-semibold transition" title="אישור שירות">
-              טופל
+                    class="p-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-semibold transition" title="אישור בדיקת מלצר">
+              ${t.alert_type === 'CHECKIN_10M' ? '✓ נבדק' : '✓ מלצר ניגש'}
             </button>
           ` : (t.status === 'OCCUPIED' && !t.menu_served ? `
             <button onclick="acknowledgeService('${t.id}')"
-                    class="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold transition" title="סמן שקיבלו תפריט / אוכל">
-              ✓ קיבל תפריט
+                    class="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold transition" title="סמן שמלצר כבר ניגש לשולחן">
+              ✓ מלצר ניגש
             </button>
           ` : '')}
           <button onclick="switchTab('calibration'); selectCalibrationTable('${t.id}');"
@@ -455,7 +462,7 @@ async function acknowledgeService(tableId) {
   try {
     const res = await fetch(`/api/tables/${tableId}/acknowledge_service`, { method: 'POST' });
     if (res.ok) {
-      showToast('סומן כמטופל / קיבל תפריט', 'success');
+      showToast('סומן כמטופל — המלצר ניגש לשולחן', 'success');
     }
   } catch (err) {
     console.error('Failed to acknowledge service:', err);
@@ -556,7 +563,7 @@ async function loadSystemSettings() {
     setVal('cfg-target-fps', cfg.target_fps);
     setVal('cfg-debounce', cfg.debounce_seconds);
     setVal('cfg-menu-thresh', cfg.menu_alert_seconds || 120);
-    setVal('cfg-alert-thresh', cfg.service_alert_threshold_seconds);
+    setVal('cfg-alert-thresh', cfg.checkin_alert_seconds || 600);
     setVal('cfg-model-name', cfg.model_name || 'yolov8n-pose.pt');
     setVal('cfg-conf', cfg.confidence_threshold);
     const multiCamChk = document.getElementById('cfg-multi-cam-ai');
@@ -683,7 +690,8 @@ async function saveSystemSettings() {
     target_fps: parseFloat(document.getElementById('cfg-target-fps').value),
     debounce_seconds: parseFloat(document.getElementById('cfg-debounce').value),
     menu_alert_seconds: parseInt(document.getElementById('cfg-menu-thresh')?.value || 120),
-    service_alert_threshold_seconds: parseInt(document.getElementById('cfg-alert-thresh').value),
+    checkin_alert_seconds: parseInt(document.getElementById('cfg-alert-thresh')?.value || 600),
+    service_alert_threshold_seconds: parseInt(document.getElementById('cfg-alert-thresh')?.value || 600),
     model_name: document.getElementById('cfg-model-name')?.value || 'yolov8n-pose.pt',
     confidence_threshold: parseFloat(document.getElementById('cfg-conf').value),
     multi_cam_ai: document.getElementById('cfg-multi-cam-ai') ? document.getElementById('cfg-multi-cam-ai').checked : true,
