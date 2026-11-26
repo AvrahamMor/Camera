@@ -277,13 +277,14 @@ class CVEngine:
                 self.latest_person_boxes = person_boxes
                 self.latest_person_confs = [d["conf"] for d in detections]
 
-                # 2. Update occupancy state machine with dual-threshold hysteresis
+                # 2. Update occupancy state machine with dual-threshold hysteresis + tabletop item check
                 statuses, events = self.tracker.update_detections(
                     detections,
                     w,
                     h,
                     active_channel=self.settings.ossia_channel,
                     strict_conf=self.settings.confidence_threshold,
+                    frame=raw_frame,
                 )
 
                 with self._lock:

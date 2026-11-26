@@ -421,7 +421,12 @@ function renderLiveTables(tables) {
                     class="p-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-semibold transition" title="אישור שירות">
               טופל
             </button>
-          ` : ''}
+          ` : (t.status === 'OCCUPIED' && !t.menu_served ? `
+            <button onclick="acknowledgeService('${t.id}')"
+                    class="px-2 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold transition" title="סמן שקיבלו תפריט / אוכל">
+              ✓ קיבל תפריט
+            </button>
+          ` : '')}
           <button onclick="switchTab('calibration'); selectCalibrationTable('${t.id}');"
                   class="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800" title="עריכת אזור שולחן">
             <i data-lucide="edit-3" class="w-3.5 h-3.5"></i>
@@ -438,7 +443,7 @@ async function acknowledgeService(tableId) {
   try {
     const res = await fetch(`/api/tables/${tableId}/acknowledge_service`, { method: 'POST' });
     if (res.ok) {
-      showToast(`התראת שירות אושרה עבור שולחן ${tableId}`, 'success');
+      showToast('סומן כמטופל / קיבל תפריט', 'success');
     }
   } catch (err) {
     console.error('Failed to acknowledge service:', err);

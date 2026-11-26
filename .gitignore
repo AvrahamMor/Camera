@@ -22,6 +22,8 @@ config/auth_config.json
 *.sqlite
 *.sqlite3
 restaurant_analytics.db
+config/table_baselines.npz
+config/live_state_cache.json
 
 # Camera Snapshots, Private Customer Footage & Video Recordings
 scratch_cameras/

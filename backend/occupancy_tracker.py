@@ -1,11 +1,17 @@
+import json
 import threading
 import time
+from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 from backend.tables_manager import tables_manager, TableModel
 from backend.database import record_seating, record_vacated, record_service_alert, acknowledge_service
 from backend.telegram_alerts import telegram_alerts
 from backend.firebase_sync import firebase_manager
+from backend.tabletop_detector import TabletopDetector, tabletop_detector
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_CACHE_PATH = BASE_DIR / "config" / "live_state_cache.json"
 
 
 def is_point_in_polygon(point: Tuple[float, float], polygon: List[List[float]]) -> bool:
@@ -67,11 +73,13 @@ class TableState:
         self.no_menu_alert_fired: bool = False
         self.service_alert_fired: bool = False
         self.service_acknowledged: bool = False
+        self.ever_occupied: bool = False
 
-        # Waiter approach timers (filters quick walk-bys / aisle glances)
+        # Waiter approach & tabletop item timers (filters quick walk-bys / aisle glances)
         self.waiter_ring_start: Optional[float] = None
         self.hand_reach_start: Optional[float] = None
         self.inner_spike_start: Optional[float] = None
+        self.tabletop_items_start: Optional[float] = None
 
         # Debounce buffer: list of (timestamp, raw_count)
         self.history: List[Tuple[float, int]] = []
@@ -83,6 +91,7 @@ class TableState:
         ring_count: int = 0,
         hold_count: Optional[int] = None,
         hand_reach_count: int = 0,
+        tabletop_items: bool = False,
     ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         """
         Feed new raw observation and update state machine with asymmetric hysteresis:
@@ -123,9 +132,11 @@ class TableState:
                 self.no_menu_alert_fired = False
                 self.service_alert_fired = False
                 self.service_acknowledged = False
+                self.ever_occupied = True
                 self.waiter_ring_start = None
                 self.hand_reach_start = None
                 self.inner_spike_start = None
+                self.tabletop_items_start = None
 
                 record_seating(self.table.id, self.table.name, self.confirmed_headcount)
                 event_name = "SEATED"
@@ -154,7 +165,9 @@ class TableState:
                     self.service_alert_fired = False
                     self.service_acknowledged = False
                     self.waiter_ring_start = None
+                    self.hand_reach_start = None
                     self.inner_spike_start = None
+                    self.tabletop_items_start = None
 
                     record_vacated(self.table.id)
                     event_name = "VACATED"
@@ -187,6 +200,15 @@ class TableState:
                     served_now = True
             else:
                 self.waiter_ring_start = None
+
+            # Signal D: Persistent plates, food, drinks, or open menus detected on unoccluded tabletop center
+            if tabletop_items and not self.menu_served:
+                if self.tabletop_items_start is None:
+                    self.tabletop_items_start = now
+                elif (now - self.tabletop_items_start) >= 8.0:
+                    served_now = True
+            else:
+                self.tabletop_items_start = None
 
             if served_now:
                 evt_name, evt_data = self._mark_waiter_arrived(now)
@@ -343,12 +365,83 @@ class TableState:
 
 
 class OccupancyTracker:
-    def __init__(self, debounce_sec: float = 4.0, menu_alert_sec: int = 120):
+    def __init__(
+        self,
+        debounce_sec: float = 4.0,
+        menu_alert_sec: int = 120,
+        cache_path: Optional[Path] = DEFAULT_CACHE_PATH,
+        detector: Optional[TabletopDetector] = None,
+    ):
         self.debounce_sec = debounce_sec
         self.menu_alert_sec = menu_alert_sec
+        self.cache_path = Path(cache_path) if cache_path else None
+        self.tabletop_detector = detector if detector is not None else tabletop_detector
         self._lock = threading.RLock()
         self.states: Dict[str, TableState] = {}
+        self._last_cache_save = 0.0
         self._sync_tables()
+        self._load_live_cache()
+
+    def _load_live_cache(self) -> None:
+        if not self.cache_path or not self.cache_path.exists():
+            return
+        try:
+            data = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            now = time.time()
+            saved_at = float(data.get("saved_at", 0.0))
+            if not (0 <= (now - saved_at) <= 600.0):
+                return
+            restored = 0
+            for tid, info in (data.get("tables") or {}).items():
+                st = self.states.get(tid)
+                if not st or info.get("status") not in ("OCCUPIED", "NEEDS_SERVICE"):
+                    continue
+                st.status = info["status"]
+                st.confirmed_headcount = max(1, int(info.get("confirmed_headcount", 1)))
+                st.seated_time = info.get("seated_time") or saved_at
+                st.last_state_change = info.get("last_state_change") or st.seated_time
+                st.last_seated_seen_time = now
+                st.last_waiter_visit_time = info.get("last_waiter_visit_time")
+                st.menu_served = bool(info.get("menu_served", False))
+                st.no_menu_alert_fired = bool(info.get("no_menu_alert_fired", False))
+                st.service_alert_fired = bool(info.get("service_alert_fired", False))
+                st.service_acknowledged = bool(info.get("service_acknowledged", False))
+                st.ever_occupied = True
+                restored += 1
+            if restored:
+                print(f"[OccupancyTracker] Restored {restored} active table(s) from cache.")
+        except Exception as e:
+            print(f"[OccupancyTracker] Cache restore skipped: {e}")
+
+    def _save_live_cache(self, now: Optional[float] = None, force: bool = False) -> None:
+        if not self.cache_path:
+            return
+        cur = now if now is not None else time.time()
+        if not force and (cur - self._last_cache_save) < 10.0:
+            return
+        try:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            active = {}
+            for tid, st in self.states.items():
+                if st.status in ("OCCUPIED", "NEEDS_SERVICE"):
+                    active[tid] = {
+                        "status": st.status,
+                        "confirmed_headcount": st.confirmed_headcount,
+                        "seated_time": st.seated_time,
+                        "last_state_change": st.last_state_change,
+                        "last_waiter_visit_time": st.last_waiter_visit_time,
+                        "menu_served": st.menu_served,
+                        "no_menu_alert_fired": st.no_menu_alert_fired,
+                        "service_alert_fired": st.service_alert_fired,
+                        "service_acknowledged": st.service_acknowledged,
+                    }
+            payload = {"saved_at": cur, "tables": active}
+            tmp_path = self.cache_path.with_name(self.cache_path.name + ".tmp")
+            tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+            tmp_path.replace(self.cache_path)
+            self._last_cache_save = cur
+        except Exception as e:
+            print(f"[OccupancyTracker] Cache save error: {e}")
 
     def set_debounce(self, debounce_sec: float):
         with self._lock:
@@ -432,6 +525,7 @@ class OccupancyTracker:
         frame_height: int,
         active_channel: Optional[int] = None,
         strict_conf: float = 0.38,
+        frame: Optional[np.ndarray] = None,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Update state machine from pinpoint pose/box detections with confidence hysteresis.
@@ -440,6 +534,13 @@ class OccupancyTracker:
         with self._lock:
             self._sync_tables()
             now = time.time()
+
+            person_boxes = [det["box"] for det in detections if "box" in det]
+            tabletop_flags = (
+                self.tabletop_detector.evaluate_channel(frame, active_channel, self.states, person_boxes, now)
+                if (frame is not None and self.tabletop_detector is not None)
+                else {}
+            )
 
             strict_anchors = []
             waiter_dets = []
@@ -509,17 +610,20 @@ class OccupancyTracker:
                         ring_count=ring_count,
                         hold_count=hold_count,
                         hand_reach_count=hand_reach_count,
+                        tabletop_items=tabletop_flags.get(table_id, False),
                     )
                     if evt_name and evt_data:
                         emitted_events.append({"event": evt_name, "data": evt_data})
 
                 table_statuses.append(self._serialize_state(state, now, frame_width, frame_height))
 
+            self._save_live_cache(now=now, force=bool(emitted_events))
             return table_statuses, emitted_events
 
     def acknowledge_service(self, table_id: str) -> bool:
         with self._lock:
             if table_id in self.states:
                 self.states[table_id].acknowledge_service()
+                self._save_live_cache(force=True)
                 return True
             return False

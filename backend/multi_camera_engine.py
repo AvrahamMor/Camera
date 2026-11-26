@@ -403,6 +403,7 @@ class MultiCameraEngine:
                             h_nat,
                             active_channel=ch,
                             strict_conf=self.settings.confidence_threshold,
+                            frame=frame,
                         )
                         if events and self.event_sink_fn:
                             self.event_sink_fn(events)
