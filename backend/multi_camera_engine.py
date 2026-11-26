@@ -279,6 +279,10 @@ class MultiCameraEngine:
             start_t = time.time()
             tiles = {}
             ai_channels = set(self.get_ai_channels())
+            statuses_by_ch: Dict[int, List[Dict[str, Any]]] = {}
+            if self.tracker is not None:
+                for st in self.tracker.get_all_statuses(tile_w, tile_h):
+                    statuses_by_ch.setdefault(st.get("camera_channel", 1), []).append(st)
 
             for ch in self.channels:
                 grabber = self.grabbers.get(ch)
@@ -290,6 +294,22 @@ class MultiCameraEngine:
                     tile = blank_tile.copy()
                     cv2.putText(tile, f"Cam {ch} Offline", (130, 120),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (100, 100, 120), 1, cv2.LINE_AA)
+
+                ch_tables = statuses_by_ch.get(ch, [])
+                if ch_tables:
+                    ov = tile.copy()
+                    for s in ch_tables:
+                        pts = np.array(s["polygon_px"], np.int32).reshape((-1, 1, 2))
+                        st_name = s["status"]
+                        if st_name == "FREE":
+                            fill_c, edge_c = (40, 160, 55), (50, 210, 80)
+                        elif st_name == "OCCUPIED":
+                            fill_c, edge_c = (40, 50, 225), (60, 75, 255)
+                        else:
+                            fill_c, edge_c = (20, 160, 240), (30, 200, 255)
+                        cv2.fillPoly(ov, [pts], fill_c)
+                        cv2.polylines(tile, [pts], True, edge_c, 2 if st_name != "FREE" else 1, cv2.LINE_AA)
+                    cv2.addWeighted(ov, 0.25, tile, 0.75, 0, tile)
 
                 is_focused = (ch == self.focused_channel)
                 border_color = (60, 120, 255) if is_focused else (40, 48, 60)
@@ -351,6 +371,7 @@ class MultiCameraEngine:
         """
         idx = 0
         while self.running:
+            step_start = time.time()
             try:
                 matrix_open = self.has_matrix_viewers_only()
                 ai_mode = bool(self.settings.multi_cam_ai and self.settings.video_source == "rtsp")
@@ -360,7 +381,8 @@ class MultiCameraEngine:
                     time.sleep(0.4)
                     continue
 
-                target_pool = self.channels if matrix_open else ai_channels
+                # Focus AI round-robin only on calibrated dining cameras (never waste CPU on Cam 1/Cam 7)
+                target_pool = ai_channels if ai_channels else (self.channels if matrix_open else [])
                 if not target_pool or self.model is None or self.detect_fn is None:
                     time.sleep(0.4)
                     continue
@@ -397,18 +419,25 @@ class MultiCameraEngine:
                         self.camera_person_boxes[ch] = scaled_boxes
 
                     if ai_mode and ch in ai_channels and self.tracker is not None:
+                        # Sub-streams (352x240 / 704x480) yield slightly lower pose confs than main HD stream
+                        sub_conf = (
+                            max(0.26, min(self.settings.confidence_threshold, self.settings.confidence_threshold - 0.06))
+                            if w_nat <= 720
+                            else self.settings.confidence_threshold
+                        )
                         _, events = self.tracker.update_detections(
                             detections,
                             w_nat,
                             h_nat,
                             active_channel=ch,
-                            strict_conf=self.settings.confidence_threshold,
+                            strict_conf=sub_conf,
                             frame=frame,
                         )
                         if events and self.event_sink_fn:
                             self.event_sink_fn(events)
 
-                time.sleep(0.33)  # ~3 inferences/sec total keeps CPU cool across all restaurant tables
+                inf_elapsed = time.time() - step_start
+                time.sleep(max(0.03, 0.28 - inf_elapsed))  # Pace ~3.5 steps/sec -> ~1.7s full cycle across 6 AI cams
             except Exception as e:
                 print(f"[MultiCam Inference Error]: {e}")
                 time.sleep(0.5)

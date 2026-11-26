@@ -378,7 +378,18 @@ function renderLiveTables(tables) {
     return;
   }
 
-  container.innerHTML = tables.map(t => {
+  // Sort active/alerting tables to the top so occupied tables on any camera are immediately visible
+  const sortedTables = [...tables].sort((a, b) => {
+    const rank = (t) => {
+      if (t.status === 'NEEDS_SERVICE') return 0;
+      if (t.status === 'OCCUPIED' && !t.menu_served) return 1;
+      if (t.status === 'OCCUPIED') return 2;
+      return 3;
+    };
+    return rank(a) - rank(b);
+  });
+
+  container.innerHTML = sortedTables.map(t => {
     let statusClass = 'status-pill-free';
     let statusText = 'פנוי';
     let cardBorder = 'border-slate-800';

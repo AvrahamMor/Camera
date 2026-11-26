@@ -103,17 +103,20 @@ class TableState:
         self.raw_ring_count = ring_count
 
         self.history.append((now, current_raw_count))
-        cutoff = now - self.debounce_sec
-        self.history = [(t, c) for t, c in self.history if t >= cutoff]
+        # Retain up to 12 samples across max(2.5*debounce, 10s) so slower Multi-Cam polls (~1.5-2.5s) never evict frame 1 before frame 3
+        retention = max(self.debounce_sec * 2.5, 10.0)
+        self.history = [(t, c) for t, c in self.history if t >= (now - retention)][-12:]
 
         event_name = None
         event_data = None
 
-        window_duration = (self.history[-1][0] - self.history[0][0]) if self.history else 0
-        is_window_full = window_duration >= (self.debounce_sec * 0.9)
+        recent = [(t, c) for t, c in self.history if t >= (now - self.debounce_sec)]
+        eval_samples = recent if len(recent) >= 3 else self.history[-3:]
+        window_duration = (eval_samples[-1][0] - eval_samples[0][0]) if len(eval_samples) >= 2 else 0.0
+        is_window_full = window_duration >= (self.debounce_sec * 0.85)
 
-        positive_frames = sum(1 for _, c in self.history if c > 0)
-        total_frames = len(self.history)
+        positive_frames = sum(1 for _, c in eval_samples if c > 0)
+        total_frames = len(eval_samples)
 
         if total_frames >= 3 and is_window_full:
             majority_positive = (positive_frames / total_frames) >= 0.80 and positive_frames >= 3
